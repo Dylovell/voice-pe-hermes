@@ -148,9 +148,11 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
 
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "WebSocket disconnected");
-      // Destroy client handle to avoid memory leak on reconnect
+      // Destroy client handle to avoid memory leak on reconnect.
+      // NOTE: Do NOT call esp_websocket_client_stop() here — we're
+      // running in the websocket task's event handler and stop()
+      // tries to join itself, causing a spinlock deadlock.
       if (self->ws_client_) {
-        esp_websocket_client_stop(self->ws_client_);
         esp_websocket_client_destroy(self->ws_client_);
         self->ws_client_ = nullptr;
       }
