@@ -38,37 +38,6 @@ web_socket_voice:
   server_host: ${ws_host}
   server_port: ${ws_port}
 
-# ── Disable stock voice_assistant ──────────────────────────────────
-# We handle everything ourselves. This prevents errors when it can't
-# reach HA's API and also prevents mic conflicts.
-voice_assistant:
-  on_client_connected:
-    - lambda: |-
-        id(init_in_progress) = false;
-        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-    - script.execute: control_leds
-    - script.execute: wake_up_websocket
-
-# ── Override esphome section ──────────────────────────────────────────
-esphome:
-  name: ${name}
-  friendly_name: ${friendly_name}
-  name_add_mac_suffix: ${name_add_mac_suffix}
-  min_version: 2025.12.0
-
-  on_boot:
-    priority: 375
-    then:
-      # Immediately mark as initialized (no HA dependency)
-      - lambda: |-
-          id(init_in_progress) = false;
-          id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-      - script.execute: control_leds
-      - delay: 1s
-      - switch.turn_on: internal_speaker_amp
-      # Start wake word detection
-      - micro_wake_word.start: mww
-
 # ── Center button → wire to our component instead of voice_assistant ──
 binary_sensor:
   - platform: gpio
@@ -214,6 +183,12 @@ wifi:
     ssid: "${name} Fallback Hotspot"
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  on_connect:
+    - lambda: |-
+        id(init_in_progress) = false;
+        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+    - script.execute: control_leds
+    - micro_wake_word.start: mww
 
 # ── OTA and API ───────────────────────────────────────────────────────
 ota:
@@ -254,13 +229,3 @@ text_sensor:
       } else {
         return {"disconnected"};
       }
-
-# ── Script to update wake word actions ────────────────────────────────
-script:
-  - id: wake_up_websocket
-    mode: single
-    then:
-      - delay: 500ms
-      # Nothing else needed - micro_wake_word.on_wake_word_detected
-      # isn't supported directly in stock models, so we use lambda
-      # in the WebSocket component instead
