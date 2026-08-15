@@ -89,16 +89,34 @@ class VoiceConnection:
         self._stats = {"utterances": 0, "total_audio_sec": 0.0}
 
     async def run(self) -> None:
-        """Main loop: read messages from the WebSocket until disconnect."""
+        """Main loop: read messages from the WebSocket until disconnect.
+
+        If the device is in LISTENING state and no data arrives for
+        SILENCE_TIMEOUT seconds, we auto-process the buffered audio.
+        This tolerates devices that never send an explicit utterance_end.
+        """
+        SILENCE_TIMEOUT = 3.0  # seconds
         peer = self.ws.remote_address
         logger.info("Device connected: %s", peer)
 
         try:
-            async for raw_message in self.ws:
-                if isinstance(raw_message, bytes):
-                    await self._on_audio(raw_message)
-                elif isinstance(raw_message, str):
-                    await self._on_json(raw_message)
+            while True:
+                try:
+                    raw_message = await asyncio.wait_for(
+                        self.ws.recv(), timeout=SILENCE_TIMEOUT
+                    )
+                    if isinstance(raw_message, bytes):
+                        await self._on_audio(raw_message)
+                    elif isinstance(raw_message, str):
+                        await self._on_json(raw_message)
+                except asyncio.TimeoutError:
+                    if self.state == ConnectionState.LISTENING:
+                        logger.info(
+                            "Server silence timeout (%ds) — "
+                            "auto-processing utterance",
+                            SILENCE_TIMEOUT,
+                        )
+                        await self._on_utterance_end()
         except ConnectionClosed:
             logger.info("Device disconnected: %s", peer)
         except Exception:
