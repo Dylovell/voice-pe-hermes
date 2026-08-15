@@ -28,19 +28,19 @@ class STTEngine:
         self._model_size: str = config.stt_model
         self._device: str = config.stt_device
         self._compute: str = config.stt_compute
-        self._loop = asyncio.get_event_loop()
 
     async def load(self) -> None:
         """Initialise the whisper model (lazy-loaded on first use)."""
         if self._model is not None:
             return
+        loop = asyncio.get_running_loop()
         logger.info(
             "Loading faster-whisper model '%s' on %s (compute=%s) ...",
             self._model_size,
             self._device,
             self._compute,
         )
-        self._model = await self._loop.run_in_executor(
+        self._model = await loop.run_in_executor(
             None,
             partial(
                 WhisperModel,
@@ -83,7 +83,8 @@ class STTEngine:
         )
 
         # Run the synchronous transcription in a thread-pool executor.
-        segments, info = await self._loop.run_in_executor(
+        loop = asyncio.get_running_loop()
+        segments, info = await loop.run_in_executor(
             None,
             partial(
                 model.transcribe,

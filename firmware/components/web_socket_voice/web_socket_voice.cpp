@@ -1,6 +1,8 @@
 #include "web_socket_voice.h"
 #include "esphome/core/application.h"
 
+#include <cstring>
+
 namespace esphome {
 namespace web_socket_voice {
 
@@ -8,87 +10,57 @@ static const char *const TAG = "web_socket_voice";
 
 // ── Constants ─────────────────────────────────────────────────────────
 
-/// Microphone sample rate (Hz).  Shorter buffers = lower latency.
 constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-/// Microchannel bit depth.
-constexpr uint8_t MIC_BITS_PER_SAMPLE = 16;
-/// Number of mic channels.
-constexpr uint8_t MIC_CHANNELS = 1;
-/// Speaker sample rate (Hz).
-constexpr uint32_t SPK_SAMPLE_RATE = 48000;
-/// Speaker bit depth.
-constexpr uint8_t SPK_BITS_PER_SAMPLE = 16;
-/// Max TTS audio size we'll buffer (5 MB).
-constexpr size_t MAX_TTS_BUFFER = 5 * 1024 * 1024;
-/// How many audio frames between silence checks.
-constexpr size_t SILENCE_CHECK_INTERVAL = 10;
-/// RMS threshold below which audio is considered silence.
 constexpr float SILENCE_THRESHOLD = 0.005f;
-/// Reconnect delay on connection failure (ms).
-constexpr uint32_t RECONNECT_DELAY_MS = 3000;
+constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
+constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
 // ── Component lifecycle ──────────────────────────────────────────────
 
 void WebSocketVoice::setup() {
   ESP_LOGI(TAG, "Setting up WebSocket Voice component");
   ESP_LOGI(TAG, "Server: %s:%d", host_.c_str(), port_);
-
-  // Start in disconnected state; the loop() will attempt to connect.
   set_state_(VoiceState::IDLE);
 }
 
 void WebSocketVoice::loop() {
-  // Let the WebSocket client process incoming data.
-  ws_.loop();
-
   const uint32_t now = millis();
 
   switch (state_) {
     case VoiceState::IDLE:
-      // Connect to server if not already connected
-      if (!ws_.isConnected()) {
-        set_state_(VoiceState::CONNECTING);
-        connect_ws();
-      }
+      // Connect to server
+      connect_ws();
+      set_state_(VoiceState::CONNECTING);
       break;
 
     case VoiceState::CONNECTING:
-      // Wait for connection, then start streaming if requested
-      if (ws_.isConnected()) {
-        ESP_LOGI(TAG, "WebSocket connected to %s:%d", host_.c_str(), port_);
-        set_state_(VoiceState::CONNECTED);
-      }
+      // Wait for connection callback to change state
       break;
 
     case VoiceState::STREAMING_MIC:
-      // Check for utterance timeout
+      // Check utterance timeout
       if (now - stream_start_ms_ > max_utterance_ms_) {
-        ESP_LOGD(TAG, "Utterance timeout reached (%d ms)", max_utterance_ms_);
+        ESP_LOGD(TAG, "Utterance timeout (%d ms)", max_utterance_ms_);
         stop_stream();
         break;
       }
-      // Check for silence timeout while streaming
+      // Check silence timeout
       if (now - last_speech_ms_ > silence_timeout_ms_ &&
-          audio_buffer_.size() > MIC_SAMPLE_RATE) {
-        ESP_LOGD(TAG, "Silence timeout reached, ending utterance");
+          audio_buffer_.size() > MIC_SAMPLE_RATE * 2) {
+        ESP_LOGD(TAG, "Silence timeout, ending utterance");
         stop_stream();
       }
       break;
 
     case VoiceState::PLAYING_TTS:
-      // Feed audio to the speaker
+      // Feed audio to speaker
       if (spk_ != nullptr && tts_play_offset_ < tts_buffer_.size()) {
-        size_t chunk_size = 1024; // bytes per write
-        if (chunk_size > tts_buffer_.size() - tts_play_offset_) {
-          chunk_size = tts_buffer_.size() - tts_play_offset_;
-        }
-        if (chunk_size > 0) {
-          spk_->play(tts_buffer_.data() + tts_play_offset_, chunk_size);
-          tts_play_offset_ += chunk_size;
-          last_activity_ms_ = now;
-        }
+        size_t remaining = tts_buffer_.size() - tts_play_offset_;
+        size_t chunk = (remaining > 1024) ? 1024 : remaining;
+        spk_->play(tts_buffer_.data() + tts_play_offset_, chunk);
+        tts_play_offset_ += chunk;
       } else {
-        // Finished playing TTS
+        // Finished
         if (spk_ != nullptr) {
           spk_->stop();
         }
@@ -96,6 +68,9 @@ void WebSocketVoice::loop() {
         tts_play_offset_ = 0;
         ESP_LOGI(TAG, "TTS playback complete");
         set_state_(VoiceState::CONNECTED);
+
+        // Send json speaking_end
+        send_json(R"({"type":"speaking_end"})");
       }
       break;
 
@@ -107,109 +82,110 @@ void WebSocketVoice::loop() {
 // ── WebSocket ─────────────────────────────────────────────────────────
 
 void WebSocketVoice::connect_ws() {
-  ESP_LOGI(TAG, "Connecting to %s:%d ...", host_.c_str(), port_);
+  char uri[128];
+  snprintf(uri, sizeof(uri), "ws://%s:%d/", host_.c_str(), port_);
+  ESP_LOGI(TAG, "Connecting to %s", uri);
 
-  ws_.begin(host_.c_str(), port_, "/");
+  esp_websocket_client_config_t cfg = {};
+  cfg.uri = uri;
+  cfg.buffer_size = 4096;
+  cfg.task_stack = 8192;
 
-  ws_.onEvent([this](WStype_t type, uint8_t *payload, size_t length) {
-    this->on_ws_event(type, payload, length);
-  });
+  ws_client_ = esp_websocket_client_init(&cfg);
+  esp_websocket_register_events(ws_client_, WEBSOCKET_EVENT_ANY,
+                                ws_event_handler_, this);
 
-  // Use the ESP32's built-in SSL if needed
-  ws_.setReconnectInterval(RECONNECT_DELAY_MS);
+  esp_websocket_client_start(ws_client_);
 }
 
 void WebSocketVoice::disconnect_ws() {
-  ESP_LOGI(TAG, "Disconnecting WebSocket");
-  ws_.disconnect();
-}
-
-void WebSocketVoice::send_audio_chunk(const uint8_t *data, size_t len) {
-  if (ws_.isConnected()) {
-    ws_.sendBIN(data, len);
+  if (ws_client_) {
+    esp_websocket_client_stop(ws_client_);
+    esp_websocket_client_destroy(ws_client_);
+    ws_client_ = nullptr;
   }
 }
 
-void WebSocketVoice::send_json(const JsonDocument &doc) {
-  if (!ws_.isConnected())
-    return;
-
-  std::string json;
-  serializeJson(doc, json);
-  ws_.sendTXT(json);
+void WebSocketVoice::send_audio_chunk(const uint8_t *data, size_t len) {
+  if (ws_client_ && esp_websocket_client_is_connected(ws_client_)) {
+    esp_websocket_client_send_bin(ws_client_, (const char *)data, len,
+                                  portMAX_DELAY);
+  }
 }
 
-void WebSocketVoice::on_ws_event(WStype_t type, uint8_t *payload,
-                                  size_t length) {
-  switch (type) {
-    case WStype_DISCONNECTED:
-      ESP_LOGW(TAG, "WebSocket disconnected");
-      set_state_(VoiceState::IDLE);
-      break;
+void WebSocketVoice::send_json(const char *json_str) {
+  if (ws_client_ && esp_websocket_client_is_connected(ws_client_)) {
+    esp_websocket_client_send_text(ws_client_, json_str, strlen(json_str),
+                                   portMAX_DELAY);
+  }
+}
 
-    case WStype_CONNECTED:
+void WebSocketVoice::ws_event_handler_(void *handler_args,
+                                        esp_event_base_t base,
+                                        int32_t event_id, void *event_data) {
+  auto *self = static_cast<WebSocketVoice *>(handler_args);
+  auto *data = static_cast<esp_websocket_event_data_t *>(event_data);
+
+  switch (event_id) {
+    case WEBSOCKET_EVENT_CONNECTED:
       ESP_LOGI(TAG, "WebSocket connected");
-      // If we were waiting to stream, start now
-      if (state_ == VoiceState::CONNECTING) {
-        set_state_(VoiceState::CONNECTED);
-      }
+      self->set_state_(VoiceState::CONNECTED);
       break;
 
-    case WStype_TEXT: {
-      // JSON message from server
-      JsonDocument doc;
-      DeserializationError err = deserializeJson(doc, payload, length);
-      if (err) {
-        ESP_LOGW(TAG, "JSON parse error: %s", err.c_str());
-        return;
-      }
-
-      const char *type_str = doc["type"];
-      if (type_str == nullptr)
-        return;
-
-      if (strcmp(type_str, "speaking_start") == 0) {
-        // Server is about to send TTS audio
-        ESP_LOGI(TAG, "Server: speaking start");
-        tts_buffer_.clear();
-        tts_play_offset_ = 0;
-        set_state_(VoiceState::WAITING_FOR_TTS);
-      } else if (strcmp(type_str, "speaking_end") == 0) {
-        // TTS finished, flush any remaining audio
-        if (spk_ != nullptr && tts_play_offset_ < tts_buffer_.size()) {
-          spk_->play(tts_buffer_.data() + tts_play_offset_,
-                     tts_buffer_.size() - tts_play_offset_);
-        }
-        if (spk_ != nullptr) {
-          spk_->stop();
-        }
-        tts_buffer_.clear();
-        tts_play_offset_ = 0;
-        ESP_LOGI(TAG, "Server: speaking end");
-        set_state_(VoiceState::CONNECTED);
-      } else if (strcmp(type_str, "pong") == 0) {
-        ESP_LOGV(TAG, "Pong received");
-      } else if (strcmp(type_str, "error") == 0) {
-        const char *msg = doc["message"];
-        ESP_LOGW(TAG, "Server error: %s", msg ? msg : "unknown");
-        set_state_(VoiceState::ERROR_STATE);
-      }
+    case WEBSOCKET_EVENT_DISCONNECTED:
+      ESP_LOGW(TAG, "WebSocket disconnected");
+      self->set_state_(VoiceState::IDLE);
       break;
-    }
 
-    case WStype_BIN: {
-      // Binary data from server = TTS audio chunk
-      if (state_ == VoiceState::WAITING_FOR_TTS ||
-          state_ == VoiceState::PLAYING_TTS) {
-        if (tts_buffer_.size() + length <= MAX_TTS_BUFFER) {
-          tts_buffer_.insert(tts_buffer_.end(), payload, payload + length);
-          set_state_(VoiceState::PLAYING_TTS);
-        } else {
-          ESP_LOGW(TAG, "TTS buffer full, dropping %d bytes", length);
+    case WEBSOCKET_EVENT_DATA: {
+      if (data->op_code == 1) {
+        // Text frame — JSON from server
+        std::string msg((const char *)data->data_ptr, data->data_len);
+
+        cJSON *root = cJSON_Parse(msg.c_str());
+        if (!root) {
+          ESP_LOGW(TAG, "JSON parse error");
+          break;
+        }
+
+        cJSON *type = cJSON_GetObjectItem(root, "type");
+        if (type && type->valuestring) {
+          if (strcmp(type->valuestring, "speaking_start") == 0) {
+            ESP_LOGI(TAG, "Server: speaking_start");
+            self->tts_buffer_.clear();
+            self->tts_play_offset_ = 0;
+            self->set_state_(VoiceState::WAITING_FOR_TTS);
+          } else if (strcmp(type->valuestring, "speaking_end") == 0) {
+            // Server finished streaming. Don't stop or clear — let the
+            // speaker finish the buffered audio naturally.
+            ESP_LOGI(TAG, "Server: speaking_end (playback continues)");
+          } else if (strcmp(type->valuestring, "pong") == 0) {
+            // keep-alive response
+          } else if (strcmp(type->valuestring, "error") == 0) {
+            cJSON *msg_json = cJSON_GetObjectItem(root, "message");
+            ESP_LOGW(TAG, "Server error: %s",
+                     msg_json ? msg_json->valuestring : "unknown");
+          }
+        }
+
+        cJSON_Delete(root);
+      } else if (data->op_code == 2) {
+        // Binary frame — TTS audio data
+        if (self->state_ == VoiceState::WAITING_FOR_TTS ||
+            self->state_ == VoiceState::PLAYING_TTS) {
+          size_t prev_size = self->tts_buffer_.size();
+          self->tts_buffer_.resize(prev_size + data->data_len);
+          memcpy(self->tts_buffer_.data() + prev_size, data->data_ptr,
+                 data->data_len);
+          self->set_state_(VoiceState::PLAYING_TTS);
         }
       }
       break;
     }
+
+    case WEBSOCKET_EVENT_ERROR:
+      ESP_LOGW(TAG, "WebSocket error");
+      break;
 
     default:
       break;
@@ -218,40 +194,39 @@ void WebSocketVoice::on_ws_event(WStype_t type, uint8_t *payload,
 
 // ── Audio handling ───────────────────────────────────────────────────
 
-void WebSocketVoice::on_mic_data_(const std::vector<int16_t> &data) {
+void WebSocketVoice::on_mic_data_(const std::vector<uint8_t> &data) {
   if (state_ != VoiceState::STREAMING_MIC)
     return;
 
-  // Add to local buffer
+  // Buffer locally — audio is 16-bit PCM delivered as uint8_t bytes
   audio_buffer_.insert(audio_buffer_.end(), data.begin(), data.end());
 
-  // Calculate RMS energy for VAD
+  // Simple energy-based VAD (treat pairs of bytes as int16 samples)
   float rms = 0.0f;
-  for (size_t i = 0; i < data.size(); i++) {
-    float sample = data[i] / 32768.0f;
+  size_t sample_count = data.size() / 2;
+  const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
+  for (size_t i = 0; i < sample_count; i++) {
+    float sample = samples[i] / 32768.0f;
     rms += sample * sample;
   }
-  rms = sqrtf(rms / data.size());
+  rms = sqrtf(rms / (sample_count > 0 ? sample_count : 1));
 
   if (rms > SILENCE_THRESHOLD) {
     last_speech_ms_ = millis();
   }
 
-  // Send audio to server as raw 16-bit PCM
-  send_audio_chunk(reinterpret_cast<const uint8_t *>(data.data()),
-                   data.size() * sizeof(int16_t));
+  // Stream to server
+  send_audio_chunk(data.data(), data.size());
 }
 
 // ── State management ──────────────────────────────────────────────────
 
 void WebSocketVoice::set_state_(VoiceState new_state) {
+  if (state_ == new_state)
+    return;
   VoiceState old_state = state_;
   state_ = new_state;
-
-  if (old_state == new_state)
-    return;
-
-  ESP_LOGD(TAG, "State: %d → %d", static_cast<int>(old_state),
+  ESP_LOGD(TAG, "State: %d -> %d", static_cast<int>(old_state),
            static_cast<int>(new_state));
 }
 
@@ -259,16 +234,16 @@ void WebSocketVoice::set_state_(VoiceState new_state) {
 
 void WebSocketVoice::start_stream() {
   if (mic_ == nullptr) {
-    ESP_LOGE(TAG, "Cannot start stream: no microphone configured");
+    ESP_LOGE(TAG, "No microphone configured");
     return;
   }
 
   if (state_ == VoiceState::STREAMING_MIC)
     return;
 
-  // If we're currently playing TTS, the server handles barge-in
+  // Barge-in: if playing TTS, stop
   if (state_ == VoiceState::PLAYING_TTS) {
-    ESP_LOGI(TAG, "Barge-in: interrupting TTS playback");
+    ESP_LOGI(TAG, "Barge-in: interrupting TTS");
     tts_buffer_.clear();
     tts_play_offset_ = 0;
     if (spk_ != nullptr) {
@@ -283,14 +258,12 @@ void WebSocketVoice::start_stream() {
   last_speech_ms_ = stream_start_ms_;
 
   // Notify server
-  JsonDocument doc;
-  doc["type"] = "utterance_start";
-  send_json(doc);
+  send_json(R"({"type":"utterance_start"})");
 
-  // Start microphone
+  // Start microphone with data callback
   mic_->start();
-  mic_->set_data_callback(
-      [this](const std::vector<int16_t> &data) { on_mic_data_(data); });
+  mic_->add_data_callback(
+      [this](const std::vector<uint8_t> &data) { on_mic_data_(data); });
 
   set_state_(VoiceState::STREAMING_MIC);
 }
@@ -299,19 +272,14 @@ void WebSocketVoice::stop_stream() {
   if (state_ != VoiceState::STREAMING_MIC)
     return;
 
-  ESP_LOGI(TAG, "Stopping microphone stream (%d samples buffered)",
+  ESP_LOGI(TAG, "Stopping microphone stream (%d samples)",
            audio_buffer_.size());
 
-  // Stop mic
   if (mic_ != nullptr) {
     mic_->stop();
   }
 
-  // Notify server
-  JsonDocument doc;
-  doc["type"] = "utterance_end";
-  send_json(doc);
-
+  send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
 }
 

@@ -1,13 +1,14 @@
 """ESPHome custom component: web_socket_voice.
 
 Replaces the built-in voice_assistant component with a WebSocket-based
-streaming component that talks directly to a Python server (not Home Assistant).
+streaming component that talks directly to a Python server (not Home
+Assistant).  Uses ESP-IDF's built-in ``esp_websocket_client`` and
+``cJSON`` — no external PlatformIO libraries needed.
 """
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
-from esphome.core import CORE
 
 # ---------------------------------------------------------------------------
 # Configuration keys
@@ -35,17 +36,6 @@ CONFIG_SCHEMA = cv.Schema(
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
-
-def _final_validator(config):
-    """Validate that this component is not used alongside voice_assistant."""
-    # The package already disables voice_assistant, but a user override may
-    # re-enable it.  We cannot easily inspect the final config from here, so
-    # we just document the constraint.
-    return config
-
-
-FINAL_VALIDATE_SCHEMA = _final_validator
-
 # ---------------------------------------------------------------------------
 # Code generation
 # ---------------------------------------------------------------------------
@@ -57,7 +47,6 @@ async def to_code(config):
     cg.add(var.set_server_host(config[CONF_SERVER_HOST]))
     cg.add(var.set_server_port(config[CONF_SERVER_PORT]))
 
-    # ESPHome Component requirements
-    cg.add_library("WLautomatik/WebSockets", "2.6.1")
-    cg.add_library("bblanchon/ArduinoJson", "7.3.1")
+    # No external libraries needed — esp_websocket_client and cJSON are
+    # part of the ESP-IDF framework (already in the toolchain).
     cg.add_define("USE_WEBSOCKET_VOICE")

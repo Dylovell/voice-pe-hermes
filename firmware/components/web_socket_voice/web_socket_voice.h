@@ -6,8 +6,8 @@
 #include "esphome/components/microphone/microphone.h"
 #include "esphome/components/speaker/speaker.h"
 
-#include <ArduinoJson.h>
-#include <WebSocketsClient.h>
+#include "esp_websocket_client.h"
+#include "cJSON.h"
 
 namespace esphome {
 namespace web_socket_voice {
@@ -25,7 +25,7 @@ enum class VoiceState : uint8_t {
 
 class WebSocketVoice : public Component {
  public:
-  // ── Configuration ──────────────────────────────────────────────────
+  // ── Configuration setters ──────────────────────────────────────────
   void set_server_host(const std::string &host) { host_ = host; }
   void set_server_port(uint16_t port) { port_ = port; }
 
@@ -47,19 +47,19 @@ class WebSocketVoice : public Component {
 
   bool is_streaming() const { return state_ == VoiceState::STREAMING_MIC; }
   bool is_speaking() const { return state_ == VoiceState::PLAYING_TTS; }
-  bool is_connected() const { return ws_.isConnected(); }
+  bool is_connected() const { return state_ != VoiceState::IDLE && state_ != VoiceState::CONNECTING && state_ != VoiceState::ERROR_STATE; }
 
  protected:
   // ── WebSocket ──────────────────────────────────────────────────────
   void connect_ws();
   void disconnect_ws();
   void send_audio_chunk(const uint8_t *data, size_t len);
-  void send_json(const JsonDocument &doc);
-  void on_ws_event(WStype_t type, uint8_t *payload, size_t length);
+  void send_json(const char *json_str);
+  static void ws_event_handler_(void *handler_args, esp_event_base_t base,
+                                 int32_t event_id, void *event_data);
 
   // ── Audio handling ─────────────────────────────────────────────────
-  /// Called by the mic's data callback.
-  void on_mic_data_(const std::vector<int16_t> &data);
+  void on_mic_data_(const std::vector<uint8_t> &data);
 
   // ── State management ───────────────────────────────────────────────
   void set_state_(VoiceState new_state);
@@ -68,28 +68,26 @@ class WebSocketVoice : public Component {
   uint16_t port_{8765};
 
   VoiceState state_{VoiceState::IDLE};
-  WebSocketsClient ws_;
+  esp_websocket_client_handle_t ws_client_{nullptr};
 
   microphone::Microphone *mic_{nullptr};
   speaker::Speaker *spk_{nullptr};
 
-  /// Buffer for audio data while listening (raw 16-bit PCM, 16 kHz).
-  std::vector<int16_t> audio_buffer_;
+  /// Buffer for audio data while listening (raw PCM bytes).
+  std::vector<uint8_t> audio_buffer_;
 
-  /// Buffer for incoming TTS audio (raw 16-bit PCM, 48 kHz).
+  /// Buffer for incoming TTS audio (raw PCM).
   std::vector<uint8_t> tts_buffer_;
   size_t tts_play_offset_{0};
 
-  /// Timestamps for timeout detection.
-  uint32_t last_activity_ms_{0};
+  /// Timestamps for timeout detection (ms).
   uint32_t stream_start_ms_{0};
-
-  /// Maximum utterance length in ms (default 30s).
-  uint32_t max_utterance_ms_{30000};
-
-  /// Silence timeout in ms (stop streaming after this much silence).
-  uint32_t silence_timeout_ms_{2000};
   uint32_t last_speech_ms_{0};
+
+  /// Maximum utterance length (default 30s).
+  uint32_t max_utterance_ms_{30000};
+  /// Silence timeout (stop after this much silence).
+  uint32_t silence_timeout_ms_{2000};
 };
 
 }  // namespace web_socket_voice
