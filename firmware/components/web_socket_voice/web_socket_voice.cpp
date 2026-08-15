@@ -148,6 +148,12 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
 
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "WebSocket disconnected");
+      // Destroy client handle to avoid memory leak on reconnect
+      if (self->ws_client_) {
+        esp_websocket_client_stop(self->ws_client_);
+        esp_websocket_client_destroy(self->ws_client_);
+        self->ws_client_ = nullptr;
+      }
       self->set_state_(VoiceState::IDLE);
       break;
 

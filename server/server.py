@@ -176,6 +176,14 @@ class VoiceConnection:
         import numpy as np
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         audio_np /= 32768.0
+        max_val = float(np.max(np.abs(audio_np))) if len(audio_np) else 0
+        nan_count = int(np.sum(np.isnan(audio_np)))
+        logger.debug(
+            "Audio conversion: %d int16 samples → %d float32 samples, "
+            "max=%.4f, nan=%d",
+            len(audio_np), len(audio_np),
+            max_val, nan_count,
+        )
         audio_data = audio_np.tobytes()
 
         audio_sec = len(audio_data) / (

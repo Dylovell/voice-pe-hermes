@@ -1,21 +1,30 @@
-# voice-pe-hermes
-# Custom ESPHome firmware for HA Voice Preview Edition that connects
-# directly to Hermes Agent via WebSocket, bypassing HA Assist.
+# Voice PE → Hermes Agent
+# =========================
+# Custom ESPHome firmware for the Home Assistant Voice Preview Edition.
 #
-# Uses the official Voice PE firmware as a base package for hardware
-# support (XMOS DSP, DAC, LEDs, buttons, mute, jack, timer), but
-# replaces the voice_assistant pipeline with our WebSocket component.
+# Uses the official Voice PE package for ALL hardware support
+# (XMOS DSP, DAC, LEDs, buttons, mute, jack, timer, voice_assistant),
+# but adds a WebSocket voice component that streams audio directly
+# to the Hermes Agent server — bypassing HA's Assist pipeline.
+#
+# The stock voice_assistant component still runs (for LED integration
+# and hardware triggers), but our C++ component auto-starts a
+# mic stream on a 3-second cycle for always-listening mode.
 
 substitutions:
-  name: voice-pe-hermes
-  friendly_name: "Voice PE Hermes"
-  name_add_mac_suffix: true
+  name: home-assistant-voice
+  friendly_name: Home Assistant Voice
 
-  # WebSocket server (Hermes VM)
+  # Wake word — comment out to disable
+  # micro_wake_word_model: hey_jarvis
+  # micro_wake_word_model: okay_nabu
+  # micro_wake_word_model: hey_mycroft
+
+  # Hermes WebSocket server
   ws_host: !secret ws_host
   ws_port: "8765"
 
-  # Phase IDs (from stock config, for LED pattern compatibility)
+  # Phase IDs (must match stock package values)
   voice_assist_idle_phase_id: "1"
   voice_assist_listening_phase_id: "3"
   voice_assist_thinking_phase_id: "4"
@@ -23,16 +32,17 @@ substitutions:
   voice_assist_not_ready_phase_id: "10"
 
 packages:
-  # Import ALL hardware from the official Voice PE config
+  # FULL official Voice PE package — all hardware, LEDs, scripts, etc.
   voice_pe: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
-
-external_components:
-  - source:
-      type: local
-      path: components/
+  # Our custom component (local)
+  web_socket_voice_local:
+    file: components/web_socket_voice/__init__.py
+    type: local
+    path: components/
     components: [web_socket_voice]
 
 # ── Custom WebSocket Voice Component ──────────────────────────────────
+# Connects directly to the Hermes server, bypassing HA voice_assistant.
 web_socket_voice:
   id: ws_voice
   server_host: ${ws_host}
@@ -40,70 +50,20 @@ web_socket_voice:
   microphone: i2s_mics
   speaker: i2s_audio_speaker
 
-# ── Voice assistant intercept ────────────────────────────────────────
-# The package's button and wake word call voice_assistant.start:. We
-# intercept via on_start to route to our WebSocket component instead.
-voice_assistant:
-  on_start:
-    - lambda: |-
-        id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-        id(ws_voice).start_stream();
-    - script.execute: control_leds
-  on_end:
-    - lambda: |-
-        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-    - script.execute: control_leds
-
-# ── WiFi ──────────────────────────────────────────────────────────────
+# ── WiFi init override ────────────────────────────────────────────────
+# The stock package waits for HA API connection to set init_in_progress=false
+# and start the wake word. Since we don't use HA API, we must do this ourselves.
+# ESPHome appends our on_connect actions to the package's (does NOT replace).
 wifi:
-  ap:
-    ssid: "${name} Fallback Hotspot"
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
   on_connect:
     - lambda: |-
         id(init_in_progress) = false;
-        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+        id(voice_assistant_phase) = 1;
     - script.execute: control_leds
-    - lambda: |-
-        id(mww).start();
 
-# ── OTA and API ───────────────────────────────────────────────────────
-ota:
-  - platform: esphome
-
-api:
-  encryption:
-    key: !secret api_encryption_key
-
-# ── Logger ────────────────────────────────────────────────────────────
+# ── Logging ────────────────────────────────────────────────────────────
 logger:
   level: DEBUG
   logs:
     web_socket_voice: DEBUG
     sensor: WARN
-
-# ── Web Server (debug) ────────────────────────────────────────────────
-web_server:
-  port: 80
-  local: true
-
-# ── Status LED ────────────────────────────────────────────────────────
-status_led:
-  pin:
-    number: GPIO2
-    inverted: true
-
-# ── Text Sensor — connection status ───────────────────────────────────
-text_sensor:
-  - platform: template
-    name: "Voice PE Hermes Status"
-    id: hermes_status
-    icon: "mdi:voice"
-    update_interval: 10s
-    lambda: |-
-      if (id(ws_voice).is_connected()) {
-        return {"connected"};
-      } else {
-        return {"disconnected"};
-      }
