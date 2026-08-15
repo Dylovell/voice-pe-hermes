@@ -38,7 +38,7 @@ web_socket_voice:
   server_host: ${ws_host}
   server_port: ${ws_port}
   microphone: i2s_mics
-  speaker: mixing_speaker
+  speaker: i2s_audio_speaker
 
 # ── Voice assistant (disabled) ───────────────────────────────────────
 # We keep it for the event hooks (wake word detection and button presses
@@ -52,8 +52,10 @@ voice_assistant:
     - script.execute: control_leds
   on_end:
     - lambda: |-
-        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-    - script.execute: control_leds
+        if (!id(ws_voice).is_streaming() && !id(ws_voice).is_speaking()) {
+          id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+          id(control_leds).execute();
+        }
 
 # ── WiFi ──────────────────────────────────────────────────────────────
 wifi:
