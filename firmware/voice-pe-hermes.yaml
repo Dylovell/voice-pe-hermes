@@ -38,6 +38,21 @@ web_socket_voice:
   server_host: ${ws_host}
   server_port: ${ws_port}
 
+# ── Voice assistant (disabled) ───────────────────────────────────────
+# We keep it for the event hooks (wake word detection and button presses
+# call voice_assistant.start:). The on_start handler intercepts and
+# routes to our WebSocket component.
+voice_assistant:
+  on_start:
+    - lambda: |-
+        id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+        id(ws_voice).start_stream();
+    - script.execute: control_leds
+  on_end:
+    - lambda: |-
+        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+    - script.execute: control_leds
+
 # ── Center button → wire to our component instead of voice_assistant ──
 binary_sensor:
   - platform: gpio
@@ -156,26 +171,6 @@ binary_sensor:
                 - event.trigger:
                     id: button_press_event
                     event_type: "triple_press"
-
-# ── Micro wake word ───────────────────────────────────────────────────
-# Uses the package's wake word models but triggers our component
-micro_wake_word:
-  id: mww
-  microphone:
-    microphone: i2s_mics
-    channels: 1
-  gain_factor: 4
-  models:
-    - model: hey_jarvis
-    - model: okay_nabu
-    - model: hey_mycroft
-  on_wake_word_detected:
-    - lambda: |-
-        if (!id(ws_voice).is_streaming() && !id(master_mute_switch).state) {
-          id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-          id(ws_voice).start_stream();
-          id(control_leds).execute();
-        }
 
 # ── WiFi ──────────────────────────────────────────────────────────────
 wifi:
