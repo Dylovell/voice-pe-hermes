@@ -171,6 +171,13 @@ class VoiceConnection:
         audio_data = bytes(self.audio_buffer)
         self.audio_buffer.clear()
 
+        # The ESP32 sends int16 PCM, but faster-whisper expects float32.
+        # Convert on the server side.
+        import numpy as np
+        audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+        audio_np /= 32768.0
+        audio_data = audio_np.tobytes()
+
         audio_sec = len(audio_data) / (
             self.sample_rate_in * 4
         )  # 4 bytes per float32 sample
