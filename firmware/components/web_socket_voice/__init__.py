@@ -8,7 +8,6 @@ Assistant).  Uses ESP-IDF's built-in ``esp_websocket_client`` and
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome import pins
 from esphome.components import microphone, speaker
 from esphome.const import CONF_ID, CONF_MICROPHONE, CONF_SPEAKER
 
@@ -35,12 +34,8 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID(): cv.declare_id(WebSocketVoice),
         cv.Required(CONF_SERVER_HOST): cv.string,
         cv.Optional(CONF_SERVER_PORT, default=8765): cv.port,
-        cv.Optional(CONF_MICROPHONE): cv.use_id(
-            cv.global_ns.microphone.Microphone
-        ),
-        cv.Optional(CONF_SPEAKER): cv.use_id(
-            cv.global_ns.speaker.Speaker
-        ),
+        cv.Optional(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
+        cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
