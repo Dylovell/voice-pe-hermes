@@ -188,7 +188,8 @@ wifi:
         id(init_in_progress) = false;
         id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
-    - micro_wake_word.start: mww
+    - lambda: |-
+        id(mww).start();
 
 # ── OTA and API ───────────────────────────────────────────────────────
 ota:
