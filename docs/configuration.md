@@ -2,7 +2,7 @@
 
 This document describes all configuration options for the voice-pe-hermes
 system — both the firmware side (ESPHome YAML) and the server side
-(environment variables, command line, config file).
+(environment variables).
 
 ---
 
@@ -50,18 +50,15 @@ wifi:
 ### WebSocket Server Connection
 
 ```yaml
-webhook:
-  - websocket:
-      url: "ws://192.168.1.199:8765"
+web_socket_voice:
+  server_host: "192.168.1.199"   # IP or hostname of the server machine
+  server_port: 8765              # Port of the WebSocket server
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | string | — | WebSocket URL of the Python server |
-| `url` (wss) | string | — | WebSocket Secure URL (wss://) if using TLS |
-
-The server defaults to port **8765**. If you change the server port, update
-this URL accordingly.
+| `server_host` | string | — | IP or hostname of the Python server |
+| `server_port` | uint16 | `8765` | Port of the WebSocket server |
 
 ### Wake Word
 
@@ -70,8 +67,9 @@ micro_wake_word:
   model: "jarvis"
   probability_cutoff: 0.5
   on_wake_word_detected:
-    - lambda: |-
-        id(hermes_voice).start_streaming();
+    - then:
+        - lambda: |-
+            id(web_socket_voice_component).start_stream();
 ```
 
 | Field | Type | Default | Description |
@@ -121,136 +119,62 @@ light:
 | Muted | Solid red | Mic muted (HW switch) |
 | Error | Flashing red | Connection or processing error |
 
-### Audio
+### Custom WebSocket Voice Component
 
 ```yaml
-# I2S microphone (XMOS DSP)
-i2s_audio:
-  - id: i2s_mic
-    i2s_lrclk: GPIO33
-    i2s_bclk: GPIO11
-    i2s_din: GPIO12
-
-# I2S speaker (MAX98357 DAC)
-i2s_audio:
-  - id: i2s_speaker
-    i2s_lrclk: GPIO20
-    i2s_bclk: GPIO21
-    i2s_dout: GPIO18
-
-microphone:
-  - platform: i2s_audio
-    id: voice_pe_mic
-    i2s_audio_id: i2s_mic
-    channel: left
-    bits_per_sample: 16
-    sample_rate: 16000
-
-speaker:
-  - platform: i2s_audio
-    id: voice_pe_speaker
-    i2s_audio_id: i2s_speaker
-    channel: mono
-    bits_per_sample: 16
-    sample_rate: 48000
-```
-
-| Component | Field | Default | Description |
-|-----------|-------|---------|-------------|
-| Microphone | `sample_rate` | `16000` | Mic sample rate (must be 16 kHz for wake word) |
-| Microphone | `bits_per_sample` | `16` | Bit depth |
-| Speaker | `sample_rate` | `48000` | Speaker sample rate (server resamples to this) |
-| Speaker | `bits_per_sample` | `16` | Bit depth |
-
-### Custom Hermes Voice Component
-
-```yaml
-hermes_voice:
-  led_ring: voice_pe_led_ring
+web_socket_voice:
+  server_host: "192.168.1.199"
+  server_port: 8765
   microphone: voice_pe_mic
   speaker: voice_pe_speaker
-  mute_switch: voice_pe_mute_switch
-  button: voice_pe_button
-  vad_mode: "auto"
-  vad_threshold: 0.3
-  vad_silence_duration: 800ms
-  max_listening_duration: 30s
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `led_ring` | light ID | — | LED ring light entity (required) |
+| `server_host` | string | — | Server hostname or IP (required) |
+| `server_port` | uint16 | `8765` | Server WebSocket port |
 | `microphone` | mic ID | — | Microphone entity (required) |
 | `speaker` | speaker ID | — | Speaker entity (required) |
-| `mute_switch` | switch ID | — | Hardware mute switch |
-| `button` | button ID | — | Physical button |
-| `vad_mode` | string | `"auto"` | VAD mode: `"auto"`, `"manual"`, `"disabled"` |
-| `vad_threshold` | float | `0.3` | VAD energy threshold (0-1, lower = more sensitive) |
-| `vad_silence_duration` | time | `800ms` | Silence duration before end-of-speech |
-| `max_listening_duration` | time | `30s` | Max recording time (safety cutoff) |
 
 ---
 
 ## Server Configuration
 
-The Python WebSocket server can be configured via environment variables, a
-`.env` file, or command-line arguments.
+The Python WebSocket server is configured entirely via environment variables.
+No command-line flags or config files are used — all settings are read from
+the environment at startup.
 
-### Command Line
+### Quick Start
 
 ```bash
+# Minimal — uses all defaults (connects to Spark DS4 at 192.168.1.201:8888)
 cd server
-python server.py [options]
+pip install -r requirements.txt
+python server.py
+
+# Override the LLM endpoint
+LLM_BASE_URL="http://localhost:11434/v1" LLM_MODEL="llama3" python server.py
 ```
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--host` | `0.0.0.0` | Bind address |
-| `--port` | `8765` | WebSocket port |
-| `--stt-model` | `tiny` | faster-whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
-| `--stt-device` | `auto` | STT device (`cpu`, `cuda`, `auto`) |
-| `--tts-backend` | `piper` | TTS backend (`piper`, `edge`, `openai`) |
-| `--tts-voice` | varies | TTS voice name |
-| `--llm-provider` | `hermes` | LLM provider (`hermes`, `openai`, or direct URL) |
-| `--llm-model` | — | Model name override |
-| `--log-level` | `info` | Log level (`debug`, `info`, `warning`, `error`) |
+### Environment Variable Reference
 
-### Environment Variables
+#### Network
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HERMES_VOICE_HOST` | `0.0.0.0` | Server bind address |
-| `HERMES_VOICE_PORT` | `8765` | WebSocket port |
-| `HERMES_VOICE_STT_MODEL` | `tiny` | faster-whisper model |
-| `HERMES_VOICE_STT_DEVICE` | `auto` | STT compute device |
-| `HERMES_VOICE_TTS_BACKEND` | `piper` | TTS backend |
-| `HERMES_VOICE_TTS_VOICE` | — | TTS voice name |
-| `HERMES_VOICE_LLM_PROVIDER` | `hermes` | LLM provider |
-| `HERMES_VOICE_LLM_MODEL` | — | LLM model override |
-| `HERMES_VOICE_LLM_SYSTEM_PROMPT` | — | Custom LLM system prompt |
-| `HERMES_VOICE_LOG_LEVEL` | `info` | Log level |
-| `OPENAI_API_KEY` | — | For OpenAI TTS/LLM |
-| `HERMES_CONFIG` | `~/.hermes/config.yaml` | Path to Hermes config |
+| `HOST` | `0.0.0.0` | Bind address for the WebSocket server |
+| `PORT` | `8765` | WebSocket server port |
 
-### TTS Backend Comparison
+#### STT (faster-whisper)
 
-| Backend | Type | Quality | Latency | Required |
-|---------|------|---------|---------|----------|
-| `piper` | Local CPU | Medium | Low | `piper-tts` Python package |
-| `edge` | Cloud (free) | High | Medium | `edge-tts` Python package, internet |
-| `openai` | Cloud (paid) | Very high | High | `openai` Python package, API key |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STT_MODEL` | `"base"` | Model size: `"tiny"`, `"base"`, `"small"`, `"medium"`, `"large"` |
+| `STT_DEVICE` | `"cpu"` | Compute device: `"cpu"`, `"cuda"`, `"auto"` |
+| `STT_COMPUTE` | `"int8"` | Compute type: `"int8"`, `"float16"`, `"float32"` |
+| `SAMPLE_RATE_IN` | `16000` | Input audio sample rate from Voice PE |
 
-**Piper** — Fully local, runs on CPU, low latency. Use this if local-only
-processing is important. Voice quality is serviceable but not as natural as
-cloud options.
-
-**Edge TTS** — Free Microsoft neural TTS. High quality voices, requires
-internet access. No API key needed. Best balance of quality and cost.
-
-**OpenAI TTS** — Highest quality, lowest latency for cloud TTS. Requires
-an OpenAI API key and incurs per-character costs.
-
-### STT Model Sizes
+**Model size tradeoffs:**
 
 | Model | Size | Speed | Accuracy | VRAM |
 |-------|------|-------|----------|------|
@@ -260,31 +184,80 @@ an OpenAI API key and incurs per-character costs.
 | `medium` | 769 MB | Slow | High | ~5 GB |
 | `large` | 1.55 GB | Slowest | Highest | ~10 GB |
 
-`tiny` and `base` are recommended for real-time voice applications. Larger
-models improve accuracy but add noticeable latency.
+`base` is the default. Use `tiny` for lowest latency on CPU. Use `small` or
+larger only when GPU (CUDA) acceleration is available.
 
-### VAD (Voice Activity Detection) Options
+#### LLM (OpenAI-compatible API)
 
-```json
-{
-  "vad_mode": "auto",
-  "vad_threshold": 0.3,
-  "vad_silence_duration_ms": 800,
-  "vad_min_speech_duration_ms": 200,
-  "vad_min_silence_duration_ms": 100,
-  "vad_buffer_size_ms": 300,
-  "vad_use_webrtc": true
-}
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_BASE_URL` | `"http://192.168.1.201:8888/v1"` | OpenAI-compatible API base URL |
+| `LLM_MODEL` | `"deepseek-v4-flash-abliterated"` | Model name to use |
+| `LLM_API_KEY` | `"sk-none"` | API key (if required by provider) |
+| `LLM_SYSTEM_PROMPT` | Hermes-style prompt | System prompt for the LLM |
+| `LLM_MAX_TOKENS` | `512` | Maximum response tokens |
+| `LLM_TEMPERATURE` | `0.7` | Response temperature (0.0 - 1.0) |
+
+The default configuration targets the Spark DS4 abliterated DeepSeek-V4-Flash
+at `192.168.1.201:8888` (a local homelab setup with dual DGX Spark nodes).
+Change `LLM_BASE_URL` and `LLM_MODEL` to use any OpenAI-compatible endpoint:
+
+```bash
+# Ollama
+LLM_BASE_URL="http://192.168.1.210:11434/v1" LLM_MODEL="qwen3.8-27b"
+
+# OpenAI
+LLM_BASE_URL="https://api.openai.com/v1" LLM_MODEL="gpt-4o-mini" LLM_API_KEY="sk-..."
+
+# vLLM
+LLM_BASE_URL="http://localhost:8000/v1" LLM_MODEL="mistral-7b"
 ```
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `vad_mode` | `auto` | `auto` (WebRTC VAD), `energy` (energy threshold), `disabled` (push-to-talk only) |
-| `vad_threshold` | `0.3` | Energy threshold for energy-mode VAD (0-1) |
-| `vad_silence_duration_ms` | `800` | ms of silence before declaring end-of-speech |
-| `vad_min_speech_duration_ms` | `200` | Minimum speech duration to prevent noise triggers |
-| `vad_min_silence_duration_ms` | `100` | Minimum silence within speech before resampling |
-| `vad_use_webrtc` | `true` | Use WebRTC VAD for more accurate voice detection |
+#### TTS (Pluggable)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTS_BACKEND` | `"edge"` | TTS engine: `"piper"`, `"edge"`, `"openai"` |
+| `TTS_VOICE` | `"en-US-AriaNeural"` | Voice name (depends on backend) |
+| `TTS_OPENAI_BASE_URL` | `"http://192.168.1.201:8888/v1"` | Base URL for OpenAI-compatible TTS |
+| `TTS_OPENAI_API_KEY` | `"sk-none"` | API key for OpenAI TTS |
+| `TTS_OPENAI_MODEL` | `"tts-1"` | TTS model name for OpenAI backend |
+| `SAMPLE_RATE_OUT` | `48000` | Output audio sample rate to Voice PE speaker |
+
+**TTS Backend Comparison:**
+
+| Backend | Type | Quality | Latency | Dependency | Notes |
+|---------|------|---------|---------|------------|-------|
+| `edge` | Cloud (free) | High | Medium | `edge-tts` | Microsoft neural TTS, no API key needed, requires internet |
+| `piper` | Local CPU | Medium | Low | `piper-tts` | Fully local, CPU-only, lower quality |
+| `openai` | Cloud (paid) | Very high | High | `openai` | OpenAI API key required, per-character cost |
+
+**Voice names by backend:**
+
+- **Edge TTS:** `"en-US-AriaNeural"`, `"en-US-JennyNeural"`, `"en-US-GuyNeural"`,
+  `"en-GB-SoniaNeural"`, `"en-AU-NatashaNeural"` (many more available)
+- **Piper:** Voice name = path to `.onnx` model file, or a named voice from the
+  piper voices catalog (e.g. `"en_US-less-medium"`)
+- **OpenAI:** `"alloy"`, `"echo"`, `"fable"`, `"onyx"`, `"nova"`, `"shimmer"`
+
+#### Barge-in / VAD
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BARGE_IN_THRESHOLD` | `0.02` | Energy threshold for barge-in detection (0.0-1.0) |
+| `BARGE_IN_MIN_FRAMES` | `3` | Minimum consecutive speech frames before triggering barge-in |
+| `VAD_CHUNK_SECONDS` | `0.03` | Audio chunk duration (seconds) for VAD analysis |
+
+The barge-in system monitors the microphone input energy during TTS playback.
+If speech energy exceeds `BARGE_IN_THRESHOLD` for at least
+`BARGE_IN_MIN_FRAMES` consecutive frames, the current TTS output is
+interrupted and the server starts a new listen cycle.
+
+#### Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VERBOSE` | `""` (false) | Set to `"1"`, `"true"`, or `"yes"` for debug-level logging |
 
 ---
 
@@ -302,38 +275,48 @@ wifi:
   ssid: "MyNetwork"
   password: "MyPassword"
 
-webhook:
-  - websocket:
-      url: "ws://192.168.1.199:8765"
+web_socket_voice:
+  server_host: "192.168.1.199"
+  server_port: 8765
+  microphone: voice_pe_mic
+  speaker: voice_pe_speaker
 
 micro_wake_word:
   model: "jarvis"
   on_wake_word_detected:
-    - lambda: |-
-        id(hermes_voice).start_streaming();
-
-hermes_voice:
-  led_ring: voice_pe_led_ring
-  microphone: voice_pe_mic
-  speaker: voice_pe_speaker
+    - then:
+        - lambda: |-
+            id(web_socket_voice_component).start_stream();
 ```
 
-### Minimal Server Config (using Hermes provider)
+### Local-Only Server (Piper TTS + Ollama)
 
 ```bash
-# Using defaults — inherits LLM config from Hermes
-export HERMES_VOICE_STT_MODEL=base
-export HERMES_VOICE_TTS_BACKEND=piper
+TTS_BACKEND=piper \
+LLM_BASE_URL="http://192.168.1.210:11434/v1" \
+LLM_MODEL="qwen3.8-27b" \
+STT_DEVICE=cpu \
 python server.py
 ```
 
-### Server with OpenAI TTS + Custom LLM
+### Low-Latency Server (GPU STT + Edge TTS)
 
 ```bash
-export HERMES_VOICE_TTS_BACKEND=openai
-export HERMES_VOICE_TTS_VOICE=alloy
-export HERMES_VOICE_LLM_PROVIDER=openai
-export HERMES_VOICE_LLM_MODEL=gpt-4o-mini
-export OPENAI_API_KEY=sk-...
-python server.py --port 8765
+STT_MODEL=tiny \
+STT_DEVICE=cuda \
+TTS_BACKEND=edge \
+TTS_VOICE=en-US-AriaNeural \
+python server.py
+```
+
+### OpenAI Cloud Pipeline
+
+```bash
+LLM_BASE_URL="https://api.openai.com/v1" \
+LLM_MODEL="gpt-4o-mini" \
+LLM_API_KEY="sk-..." \
+TTS_BACKEND=openai \
+TTS_VOICE=alloy \
+OPENAI_API_KEY="sk-..." \
+python server.py
 ```
