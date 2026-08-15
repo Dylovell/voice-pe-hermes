@@ -58,6 +58,8 @@ web_socket_voice:
 # and start the wake word. Since we don't use HA API, we must do this ourselves.
 # ESPHome appends our on_connect actions to the package's (does NOT replace).
 wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
   on_connect:
     - lambda: |-
         id(init_in_progress) = false;
