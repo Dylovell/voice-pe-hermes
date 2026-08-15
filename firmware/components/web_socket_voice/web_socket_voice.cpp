@@ -234,12 +234,14 @@ void WebSocketVoice::set_state_(VoiceState new_state) {
 
 void WebSocketVoice::start_stream() {
   if (mic_ == nullptr) {
-    ESP_LOGE(TAG, "No microphone configured");
+    ESP_LOGE(TAG, "start_stream() called but NO MICROPHONE configured!");
     return;
   }
 
-  if (state_ == VoiceState::STREAMING_MIC)
+  if (state_ == VoiceState::STREAMING_MIC) {
+    ESP_LOGV(TAG, "start_stream() already streaming, ignoring");
     return;
+  }
 
   // Barge-in: if playing TTS, stop
   if (state_ == VoiceState::PLAYING_TTS) {
@@ -251,7 +253,7 @@ void WebSocketVoice::start_stream() {
     }
   }
 
-  ESP_LOGI(TAG, "Starting microphone stream");
+  ESP_LOGI(TAG, "STARTING microphone stream (state=%d)", static_cast<int>(state_));
 
   audio_buffer_.clear();
   stream_start_ms_ = millis();

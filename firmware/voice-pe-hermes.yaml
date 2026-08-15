@@ -40,14 +40,16 @@ web_socket_voice:
   microphone: i2s_mics
   speaker: i2s_audio_speaker
 
-# ── Voice assistant (disabled) ───────────────────────────────────────
-# We keep it for the event hooks (wake word detection and button presses
-# call voice_assistant.start:). The on_start handler intercepts and
-# routes to our WebSocket component.
+# ── Voice assistant intercept ───────────────────────────────────────
+# Configured with hardware so it doesn't error out. The on_start
+# handler routes the pipeline to our WebSocket component instead of HA.
 voice_assistant:
+  microphone: i2s_mics
+  media_player: external_media_player
   on_start:
     - lambda: |-
         id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+        ESP_LOGD("web_socket_voice", "on_start: calling start_stream()");
         id(ws_voice).start_stream();
     - script.execute: control_leds
   on_end:
