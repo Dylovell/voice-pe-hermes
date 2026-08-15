@@ -138,7 +138,12 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
   switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
       ESP_LOGI(TAG, "WebSocket connected");
-      self->set_state_(VoiceState::CONNECTED);
+      // Don't overwrite streaming or playing states
+      if (self->state_ != VoiceState::STREAMING_MIC &&
+          self->state_ != VoiceState::WAITING_FOR_TTS &&
+          self->state_ != VoiceState::PLAYING_TTS) {
+        self->set_state_(VoiceState::CONNECTED);
+      }
       break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
