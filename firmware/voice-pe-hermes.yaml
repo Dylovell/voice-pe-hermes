@@ -38,7 +38,7 @@ web_socket_voice:
   server_host: ${ws_host}
   server_port: ${ws_port}
   microphone: i2s_mics
-  speaker: speaker
+  speaker: mixing_speaker
 
 # ── Voice assistant (disabled) ───────────────────────────────────────
 # We keep it for the event hooks (wake word detection and button presses
