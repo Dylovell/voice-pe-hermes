@@ -271,10 +271,12 @@ void WebSocketVoice::start_stream() {
   // Notify server
   send_json(R"({"type":"utterance_start"})");
 
-  // Start microphone with data callback
-  mic_->start();
-  mic_->add_data_callback(
-      [this](const std::vector<uint8_t> &data) { on_mic_data_(data); });
+  // Add mic data callback only once
+  if (!mic_callback_added_) {
+    mic_->add_data_callback(
+        [this](const std::vector<uint8_t> &data) { on_mic_data_(data); });
+    mic_callback_added_ = true;
+  }
 
   set_state_(VoiceState::STREAMING_MIC);
 }
@@ -286,12 +288,12 @@ void WebSocketVoice::stop_stream() {
   ESP_LOGI(TAG, "Stopping microphone stream (%d samples)",
            audio_buffer_.size());
 
-  if (mic_ != nullptr) {
-    mic_->stop();
-  }
-
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
+
+  // Reset auto-start so the cycle continues
+  // (allows always-listening mode)
+  auto_started_ = false;
 }
 
 }  // namespace web_socket_voice

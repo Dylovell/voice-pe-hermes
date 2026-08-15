@@ -91,6 +91,9 @@ class WebSocketVoice : public Component {
 
   /// Flag: has the auto-start already fired?
   bool auto_started_{false};
+
+  /// Flag: has the mic data callback already been registered?
+  bool mic_callback_added_{false};
 };
 
 }  // namespace web_socket_voice
