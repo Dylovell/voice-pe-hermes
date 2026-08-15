@@ -34,11 +34,10 @@ substitutions:
 packages:
   # FULL official Voice PE package — all hardware, LEDs, scripts, etc.
   voice_pe: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
-  # Our custom component (local)
-  web_socket_voice_local:
-    file: components/web_socket_voice/__init__.py
-    type: local
-    path: components/
+
+# Import our custom component (local Python, not YAML)
+external_components:
+  - source: components/
     components: [web_socket_voice]
 
 # ── Custom WebSocket Voice Component ──────────────────────────────────
