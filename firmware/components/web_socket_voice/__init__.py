@@ -8,7 +8,9 @@ Assistant).  Uses ESP-IDF's built-in ``esp_websocket_client`` and
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.const import CONF_ID
+from esphome import pins
+from esphome.components import microphone, speaker
+from esphome.const import CONF_ID, CONF_MICROPHONE, CONF_SPEAKER
 
 # ---------------------------------------------------------------------------
 # Configuration keys
@@ -33,6 +35,12 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID(): cv.declare_id(WebSocketVoice),
         cv.Required(CONF_SERVER_HOST): cv.string,
         cv.Optional(CONF_SERVER_PORT, default=8765): cv.port,
+        cv.Optional(CONF_MICROPHONE): cv.use_id(
+            cv.global_ns.microphone.Microphone
+        ),
+        cv.Optional(CONF_SPEAKER): cv.use_id(
+            cv.global_ns.speaker.Speaker
+        ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -47,6 +55,12 @@ async def to_code(config):
     cg.add(var.set_server_host(config[CONF_SERVER_HOST]))
     cg.add(var.set_server_port(config[CONF_SERVER_PORT]))
 
-    # No external libraries needed — esp_websocket_client and cJSON are
-    # part of the ESP-IDF framework (already in the toolchain).
+    if CONF_MICROPHONE in config:
+        mic = await cg.get_variable(config[CONF_MICROPHONE])
+        cg.add(var.set_microphone(mic))
+
+    if CONF_SPEAKER in config:
+        spk = await cg.get_variable(config[CONF_SPEAKER])
+        cg.add(var.set_speaker(spk))
+
     cg.add_define("USE_WEBSOCKET_VOICE")
