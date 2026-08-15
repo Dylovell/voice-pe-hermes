@@ -85,9 +85,12 @@ class WebSocketVoice : public Component {
   uint32_t last_speech_ms_{0};
 
   /// Maximum utterance length (default 30s).
-  uint32_t max_utterance_ms_{30000};
+  uint32_t max_utterance_ms_{10000};
   /// Silence timeout (stop after this much silence).
-  uint32_t silence_timeout_ms_{2000};
+  uint32_t silence_timeout_ms_{1500};
+
+  /// Flag: has the auto-start already fired?
+  bool auto_started_{false};
 };
 
 }  // namespace web_socket_voice

@@ -40,24 +40,19 @@ web_socket_voice:
   microphone: i2s_mics
   speaker: i2s_audio_speaker
 
-# ── Voice assistant intercept ───────────────────────────────────────
-# Configured with hardware so it doesn't error out. The on_start
-# handler routes the pipeline to our WebSocket component instead of HA.
+# ── Voice assistant intercept ────────────────────────────────────────
+# The package's button and wake word call voice_assistant.start:. We
+# intercept via on_start to route to our WebSocket component instead.
 voice_assistant:
-  microphone: i2s_mics
-  media_player: external_media_player
   on_start:
     - lambda: |-
         id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-        ESP_LOGD("web_socket_voice", "on_start: calling start_stream()");
         id(ws_voice).start_stream();
     - script.execute: control_leds
   on_end:
     - lambda: |-
-        if (!id(ws_voice).is_streaming() && !id(ws_voice).is_speaking()) {
-          id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-          id(control_leds).execute();
-        }
+        id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+    - script.execute: control_leds
 
 # ── WiFi ──────────────────────────────────────────────────────────────
 wifi:

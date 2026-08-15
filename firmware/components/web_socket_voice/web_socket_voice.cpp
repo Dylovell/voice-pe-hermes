@@ -11,7 +11,7 @@ static const char *const TAG = "web_socket_voice";
 // ── Constants ─────────────────────────────────────────────────────────
 
 constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-constexpr float SILENCE_THRESHOLD = 0.005f;
+constexpr float SILENCE_THRESHOLD = 0.02f;
 constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
 constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
@@ -35,6 +35,15 @@ void WebSocketVoice::loop() {
 
     case VoiceState::CONNECTING:
       // Wait for connection callback to change state
+      break;
+
+    case VoiceState::CONNECTED:
+      // Auto-start streaming after 3s (for testing — remove when button works)
+      if (now > 3000 && !auto_started_) {
+        auto_started_ = true;
+        ESP_LOGI(TAG, "Auto-trigger: start_stream()");
+        start_stream();
+      }
       break;
 
     case VoiceState::STREAMING_MIC:
