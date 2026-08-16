@@ -5,9 +5,17 @@
 #include "esphome/core/log.h"
 #include "esphome/components/microphone/microphone.h"
 #include "esphome/components/speaker/speaker.h"
+#include "esphome/components/script/script.h"
+#include "esphome/components/globals/globals_component.h"
 
 #include "esp_websocket_client.h"
 #include "cJSON.h"
+
+// Explicit includes for std namespace types — ESP-IDF 14.2.0 toolchain
+// may not pull these transitively through ESPHome headers, causing
+// "'vector' in namespace 'esphome::web_socket_voice::std'" errors.
+#include <vector>
+#include <string>
 
 namespace esphome {
 namespace web_socket_voice {
@@ -26,8 +34,17 @@ enum class VoiceState : uint8_t {
 class WebSocketVoice : public Component {
  public:
   // ── Configuration setters ──────────────────────────────────────────
-  void set_server_host(const std::string &host) { host_ = host; }
+  void set_server_host(const ::std::string &host) { host_ = host; }
   void set_server_port(uint16_t port) { port_ = port; }
+
+  /// Set pointer to the stock voice_assistant_phase global (for LED control).
+  void set_voice_assistant_phase(globals::GlobalsComponent<int> *phase) {
+    voice_assistant_phase_ = phase;
+  }
+  /// Set pointer to the stock control_leds script (for LED animations).
+  void set_control_leds(script::SingleScript<> *script) {
+    control_leds_ = script;
+  }
 
   void set_microphone(microphone::Microphone *mic) { mic_ = mic; }
   void set_speaker(speaker::Speaker *spk) { spk_ = spk; }
@@ -59,12 +76,12 @@ class WebSocketVoice : public Component {
                                  int32_t event_id, void *event_data);
 
   // ── Audio handling ─────────────────────────────────────────────────
-  void on_mic_data_(const std::vector<uint8_t> &data);
+  void on_mic_data_(const ::std::vector<uint8_t> &data);
 
   // ── State management ───────────────────────────────────────────────
   void set_state_(VoiceState new_state);
 
-  std::string host_;
+  ::std::string host_;
   uint16_t port_{8765};
 
   VoiceState state_{VoiceState::IDLE};
@@ -73,11 +90,15 @@ class WebSocketVoice : public Component {
   microphone::Microphone *mic_{nullptr};
   speaker::Speaker *spk_{nullptr};
 
+  /// Pointers to stock package globals for LED control (set via YAML wiring).
+  globals::GlobalsComponent<int> *voice_assistant_phase_{nullptr};
+  script::SingleScript<> *control_leds_{nullptr};
+
   /// Buffer for audio data while listening (raw PCM bytes).
-  std::vector<uint8_t> audio_buffer_;
+  ::std::vector<uint8_t> audio_buffer_;
 
   /// Buffer for incoming TTS audio (raw PCM).
-  std::vector<uint8_t> tts_buffer_;
+  ::std::vector<uint8_t> tts_buffer_;
   size_t tts_play_offset_{0};
 
   /// Timestamps for timeout detection (ms).

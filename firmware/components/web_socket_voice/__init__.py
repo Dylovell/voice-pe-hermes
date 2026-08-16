@@ -10,6 +10,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import microphone, speaker
 from esphome.const import CONF_ID, CONF_MICROPHONE, CONF_SPEAKER
+from esphome.core import ID
 
 # ---------------------------------------------------------------------------
 # Configuration keys
@@ -57,5 +58,20 @@ async def to_code(config):
     if CONF_SPEAKER in config:
         spk = await cg.get_variable(config[CONF_SPEAKER])
         cg.add(var.set_speaker(spk))
+
+    # Wire LED control pointers from the stock package's globals.
+    # These are generated as `static` in main.cpp, so we obtain them
+    # through ESPHome's codegen ID resolution (not extern).
+    try:
+        va_phase = await cg.get_variable(ID("voice_assistant_phase"))
+        cg.add(var.set_voice_assistant_phase(va_phase))
+    except Exception:
+        pass  # Optional — stock package may omit if not configured
+
+    try:
+        ctrl_leds = await cg.get_variable(ID("control_leds"))
+        cg.add(var.set_control_leds(ctrl_leds))
+    except Exception:
+        pass  # Optional
 
     cg.add_define("USE_WEBSOCKET_VOICE")

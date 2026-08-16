@@ -7,25 +7,13 @@
 #include <string>
 #include <vector>
 
-// Forward declarations of globals codegen-generated from stock package YAML.
-// These are at esphome:: level (NOT in a sub-namespace), so we must declare
-// them outside of web_socket_voice to avoid linker mismatches.
-extern int voice_assistant_phase;
-extern esphome::script::SingleScript<> *control_leds;
-
-namespace esphome {
-namespace web_socket_voice {
-
-static const char *const TAG = "web_socket_voice";
-
-// ── Constants ─────────────────────────────────────────────────────────
-
-constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-constexpr float SILENCE_THRESHOLD = 0.02f;
-constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
-constexpr uint32_t RECONNECT_DELAY_MS = 5000;
-
-// ── LED integration with stock control_leds script ─────────────────────
+// ═══════════════════════════════════════════════
+// LED integration with stock control_leds script
+// ═══════════════════════════════════════════════
+// Pointers are set from YAML via set_voice_assistant_phase() and
+// set_control_leds() — no extern declarations needed.  The stock
+// package declares these as `static` so we access them through
+// member pointers wired by ESPHome codegen (see __init__.py).
 
 // Phase IDs from the stock Voice PE package (must match substitutions):
 //   voice_assist_idle_phase_id = "1"
@@ -38,6 +26,34 @@ static constexpr uint8_t VA_PHASE_IDLE = 1;
 static constexpr uint8_t VA_PHASE_LISTENING = 3;
 static constexpr uint8_t VA_PHASE_THINKING = 4;
 static constexpr uint8_t VA_PHASE_REPLYING = 5;
+
+// ── LED helper macros ─────────────────────────
+// Guarded by null-checks — pointers are only set if YAML wires them.
+// Takes an explicit `obj` parameter (either `this` or a `self` pointer)
+// because LED_SET_PHASE/LED_RUN_SCRIPT are also used in static functions
+// (ws_event_handler_) that cannot access members via implicit `this`.
+#define LED_SET_PHASE(obj, phase)                     \
+  do {                                                 \
+    if ((obj)->voice_assistant_phase_ != nullptr)       \
+      (obj)->voice_assistant_phase_->value() = (phase); \
+  } while (0)
+#define LED_RUN_SCRIPT(obj)                           \
+  do {                                                 \
+    if ((obj)->control_leds_ != nullptr)                \
+      (obj)->control_leds_->execute();                  \
+  } while (0)
+
+namespace esphome {
+namespace web_socket_voice {
+
+static const char *const TAG = "web_socket_voice";
+
+// ── Constants ─────────────────────────────────────────────────────────
+
+constexpr uint32_t MIC_SAMPLE_RATE = 16000;
+constexpr float SILENCE_THRESHOLD = 0.02f;
+constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
+constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
 // ── Component lifecycle ──────────────────────────────────────────────
 
@@ -115,9 +131,9 @@ void WebSocketVoice::loop() {
         ESP_LOGI(TAG, "TTS playback complete");
         set_state_(VoiceState::CONNECTED);
 
-        // Reset LED phase — TTS audio is done playing
-        voice_assistant_phase = VA_PHASE_IDLE;
-        control_leds->execute();
+        // Update LED to idle animation
+        LED_SET_PHASE(this, VA_PHASE_IDLE);
+        LED_RUN_SCRIPT(this);
 
         // Send json speaking_end
         send_json(R"({"type":"speaking_end"})");
@@ -223,8 +239,8 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
             self->tts_play_offset_ = 0;
             self->set_state_(VoiceState::WAITING_FOR_TTS);
             // Update LED to "replying" animation
-            voice_assistant_phase = VA_PHASE_REPLYING;
-            control_leds->execute();
+            LED_SET_PHASE(self, VA_PHASE_REPLYING);
+            LED_RUN_SCRIPT(self);
           } else if (strcmp(type->valuestring, "speaking_end") == 0) {
             // Server finished streaming. Don't stop or clear — let the
             // speaker finish the buffered audio naturally.
@@ -330,8 +346,8 @@ void WebSocketVoice::start_stream() {
   last_speech_ms_ = stream_start_ms_;
 
   // Update LED to "listening" animation
-  voice_assistant_phase = VA_PHASE_LISTENING;
-  control_leds->execute();
+  LED_SET_PHASE(this, VA_PHASE_LISTENING);
+  LED_RUN_SCRIPT(this);
 
   // Notify server
   send_json(R"({"type":"utterance_start"})");
@@ -356,10 +372,9 @@ void WebSocketVoice::stop_stream() {
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
 
-  // Reset LED phase back to idle so the control_leds script shows
-  // the correct default animation (idle / no-HA-connection indicator).
-  voice_assistant_phase = VA_PHASE_IDLE;
-  control_leds->execute();
+  // Reset LED phase back to idle
+  LED_SET_PHASE(this, VA_PHASE_IDLE);
+  LED_RUN_SCRIPT(this);
 }
 
 }  // namespace web_socket_voice

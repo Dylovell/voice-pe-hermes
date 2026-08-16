@@ -286,8 +286,9 @@ def _ensure_pcm16(data: bytes) -> bytes:
             import numpy as np
 
             arr = np.frombuffer(data, dtype=np.float32)
-            # Clip to [-1, 1] and scale to int16 range
+            # Clip to [-1, 1], replace NaN with 0, and scale to int16 range
             arr = np.clip(arr, -1.0, 1.0)
+            arr = np.nan_to_num(arr)
             arr_int16 = (arr * 32767).astype(np.int16)
             return arr_int16.tobytes()
     except struct.error:
