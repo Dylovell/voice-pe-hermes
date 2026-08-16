@@ -92,7 +92,7 @@ class STTEngine:
                 beam_size=5,
                 language="en",
                 condition_on_previous_text=False,
-                vad_filter=True,  # let faster-whisper handle VAD (filter out silence)
+                vad_filter=False,  # skip VAD — handle silence server-side (3s timeout)
             ),
         )
 
