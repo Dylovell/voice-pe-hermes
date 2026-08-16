@@ -372,6 +372,16 @@ void WebSocketVoice::start_stream() {
 
   ESP_LOGI(TAG, "STARTING microphone stream (state=%d)", static_cast<int>(state_));
 
+  // Re-establish WebSocket connection on every utterance.  The server
+  // may have restarted, leaving a half-open TCP — esp_websocket_client
+  // won't detect this without application-level keepalive.  Destroying
+  // and reconnecting every time is safer and only costs ~5ms on LAN.
+  if (ws_client_) {
+    esp_websocket_client_destroy(ws_client_);
+    ws_client_ = nullptr;
+  }
+  connect_ws();
+
   preconnect_buffer_.clear();
   utterance_start_sent_ = false;
   stream_start_ms_ = millis();
