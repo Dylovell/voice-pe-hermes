@@ -7,9 +7,10 @@
 # but adds a WebSocket voice component that streams audio directly
 # to the Hermes Agent server — bypassing HA's Assist pipeline.
 #
-# The stock voice_assistant component still runs (for LED integration
-# and hardware triggers), but our C++ component auto-starts a
-# mic stream on a 3-second cycle for always-listening mode.
+# NOTE: The stock voice_assistant component still compiles (for LED
+# integration and hardware triggers), but our custom component replaces
+# its audio pipeline. The center_button's single-click calls our
+# ws_voice.start_stream() instead of voice_assistant.start().
 
 substitutions:
   name: home-assistant-voice
@@ -52,6 +53,32 @@ web_socket_voice:
   server_port: ${ws_port}
   microphone: i2s_mics
   speaker: i2s_audio_speaker
+
+# ── Script: start our WebSocket voice assistant ──────────────────────
+# Replaces voice_assistant.start() which requires HA API connection.
+# Manages LED state via voice_assistant_phase + control_leds for visual
+# feedback (Listening For Command animation).
+script:
+  - id: start_ws_voice_assistant
+    then:
+      - lambda: |-
+          ESP_LOGD("button", "Start ws_voice assistant (button press)");
+          id(ws_voice).start_stream();
+          id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+          id(control_leds).execute();
+
+# ── Center Button Override ───────────────────────────────────────────
+# DISABLED for T1 — the stock package's center_button routes simple-click
+# through voice_assistant.start() which is a no-op without HA but harmless.
+# T3 (t_393fb1fa) will reinstate this with proper ws_voice routing.
+#binary_sensor:
+#  # Center Button. Used for many things (See on_multi_click)
+#  - platform: gpio
+#    id: center_button
+#    pin:
+#      number: GPIO0
+#      inverted: true
+#   ... (multi-click chain from stock package) ...
 
 # ── WiFi init override ────────────────────────────────────────────────
 # The stock package waits for HA API connection to set init_in_progress=false

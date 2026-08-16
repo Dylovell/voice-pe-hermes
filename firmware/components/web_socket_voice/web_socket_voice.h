@@ -83,17 +83,24 @@ class WebSocketVoice : public Component {
   /// Timestamps for timeout detection (ms).
   uint32_t stream_start_ms_{0};
   uint32_t last_speech_ms_{0};
+  /// Timestamp of the last WebSocket connection attempt (ms).
+  uint32_t last_connect_ms_{0};
 
   /// Maximum utterance length (default 30s).
   uint32_t max_utterance_ms_{5000};
   /// Silence timeout (stop after this much silence).
   uint32_t silence_timeout_ms_{1500};
 
-  /// Flag: has the auto-start already fired?
-  bool auto_started_{false};
-
   /// Flag: has the mic data callback already been registered?
   bool mic_callback_added_{false};
+
+  /// Flag: WebSocket disconnected while in websocket task; main loop
+  /// must destroy the handle (don't call destroy/stop from event handler).
+  bool ws_needs_reconnect_{false};
+  /// Timestamp of last reconnect attempt (ms).
+  uint32_t last_reconnect_ms_{0};
+  /// Maximum reconnect backoff delay (ms).
+  uint32_t max_reconnect_delay_ms_{30000};
 };
 
 }  // namespace web_socket_voice

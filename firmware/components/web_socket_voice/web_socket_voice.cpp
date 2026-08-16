@@ -1,7 +1,17 @@
 #include "web_socket_voice.h"
 #include "esphome/core/application.h"
+#include "esphome/components/wifi/wifi_component.h"
+#include "esphome/components/script/script.h"
 
 #include <cstring>
+#include <string>
+#include <vector>
+
+// Forward declarations of globals codegen-generated from stock package YAML.
+// These are at esphome:: level (NOT in a sub-namespace), so we must declare
+// them outside of web_socket_voice to avoid linker mismatches.
+extern int voice_assistant_phase;
+extern esphome::script::SingleScript<> *control_leds;
 
 namespace esphome {
 namespace web_socket_voice {
@@ -14,6 +24,20 @@ constexpr uint32_t MIC_SAMPLE_RATE = 16000;
 constexpr float SILENCE_THRESHOLD = 0.02f;
 constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
 constexpr uint32_t RECONNECT_DELAY_MS = 5000;
+
+// ── LED integration with stock control_leds script ─────────────────────
+
+// Phase IDs from the stock Voice PE package (must match substitutions):
+//   voice_assist_idle_phase_id = "1"
+//   voice_assist_listening_phase_id = "3"
+//   voice_assist_thinking_phase_id = "4"
+//   voice_assist_replying_phase_id = "5"
+// These are NOT extern symbols — they are YAML template substitutions
+// inlined at compile time.  We hard-code the numeric values here.
+static constexpr uint8_t VA_PHASE_IDLE = 1;
+static constexpr uint8_t VA_PHASE_LISTENING = 3;
+static constexpr uint8_t VA_PHASE_THINKING = 4;
+static constexpr uint8_t VA_PHASE_REPLYING = 5;
 
 // ── Component lifecycle ──────────────────────────────────────────────
 
@@ -28,22 +52,35 @@ void WebSocketVoice::loop() {
 
   switch (state_) {
     case VoiceState::IDLE:
-      // Connect to server
-      connect_ws();
-      set_state_(VoiceState::CONNECTING);
+      // First connection — wait for WiFi before attempting WebSocket.
+      // This avoids an immediate connection failure (and spinlock assert
+      // on old ESP-IDF websocket client) when lwip has no route yet.
+      if (!ws_client_) {
+        if (wifi::global_wifi_component->is_connected()) {
+          ESP_LOGI(TAG, "Initiating WebSocket connection");
+          connect_ws();
+          set_state_(VoiceState::CONNECTING);
+        }
+        break;
+      }
+      // Stale client handle from a prior disconnect — destroy from the
+      // main loop context (safe, not from websocket task).
+      if (ws_needs_reconnect_) {
+        ws_needs_reconnect_ = false;
+        ESP_LOGD(TAG, "Destroying stale WebSocket client handle");
+        esp_websocket_client_destroy(ws_client_);
+        ws_client_ = nullptr;
+      }
       break;
 
     case VoiceState::CONNECTING:
-      // Wait for connection callback to change state
+      // Wait — esp_websocket_client has already exited (we used
+      // disable_auto_reconnect=true), so WEBSOCKET_EVENT_CONNECTED
+      // or WEBSOCKET_EVENT_DISCONNECTED will fire synchronously.
       break;
 
     case VoiceState::CONNECTED:
-      // Auto-start streaming after 3s (for testing — remove when button works)
-      if (now > 3000 && !auto_started_) {
-        auto_started_ = true;
-        ESP_LOGI(TAG, "Auto-trigger: start_stream()");
-        start_stream();
-      }
+      // Idle — waiting for button press or wake word to call start_stream().
       break;
 
     case VoiceState::STREAMING_MIC:
@@ -78,6 +115,10 @@ void WebSocketVoice::loop() {
         ESP_LOGI(TAG, "TTS playback complete");
         set_state_(VoiceState::CONNECTED);
 
+        // Reset LED phase — TTS audio is done playing
+        voice_assistant_phase = VA_PHASE_IDLE;
+        control_leds->execute();
+
         // Send json speaking_end
         send_json(R"({"type":"speaking_end"})");
       }
@@ -99,11 +140,17 @@ void WebSocketVoice::connect_ws() {
   cfg.uri = uri;
   cfg.buffer_size = 4096;
   cfg.task_stack = 8192;
+  // CRITICAL: disable auto-reconnect.  When the connection fails the
+  // websocket task exits immediately (instead of entering a 10 s
+  // WAIT_TIMEOUT).  This lets our loop() safely call destroy() without
+  // blocking or contending for spinlocks across core boundaries.
+  cfg.disable_auto_reconnect = true;
 
   ws_client_ = esp_websocket_client_init(&cfg);
   esp_websocket_register_events(ws_client_, WEBSOCKET_EVENT_ANY,
                                 ws_event_handler_, this);
 
+  last_connect_ms_ = millis();
   esp_websocket_client_start(ws_client_);
 }
 
@@ -148,21 +195,19 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
 
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "WebSocket disconnected");
-      // Destroy client handle to avoid memory leak on reconnect.
-      // NOTE: Do NOT call esp_websocket_client_stop() here — we're
-      // running in the websocket task's event handler and stop()
-      // tries to join itself, causing a spinlock deadlock.
-      if (self->ws_client_) {
-        esp_websocket_client_destroy(self->ws_client_);
-        self->ws_client_ = nullptr;
-      }
+      // NOTE: Do NOT call esp_websocket_client_destroy() here — we're
+      // running in the websocket task's event handler and destroy()
+      // internally calls stop() which tries to join itself, causing a
+      // spinlock deadlock.  Instead, flag the main loop to destroy
+      // the handle from the safe main-loop context.
+      self->ws_needs_reconnect_ = true;
       self->set_state_(VoiceState::IDLE);
       break;
 
     case WEBSOCKET_EVENT_DATA: {
       if (data->op_code == 1) {
         // Text frame — JSON from server
-        std::string msg((const char *)data->data_ptr, data->data_len);
+        ::std::string msg((const char *)data->data_ptr, data->data_len);
 
         cJSON *root = cJSON_Parse(msg.c_str());
         if (!root) {
@@ -177,6 +222,9 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
             self->tts_buffer_.clear();
             self->tts_play_offset_ = 0;
             self->set_state_(VoiceState::WAITING_FOR_TTS);
+            // Update LED to "replying" animation
+            voice_assistant_phase = VA_PHASE_REPLYING;
+            control_leds->execute();
           } else if (strcmp(type->valuestring, "speaking_end") == 0) {
             // Server finished streaming. Don't stop or clear — let the
             // speaker finish the buffered audio naturally.
@@ -216,7 +264,7 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
 
 // ── Audio handling ───────────────────────────────────────────────────
 
-void WebSocketVoice::on_mic_data_(const std::vector<uint8_t> &data) {
+void WebSocketVoice::on_mic_data_(const ::std::vector<uint8_t> &data) {
   if (state_ != VoiceState::STREAMING_MIC)
     return;
 
@@ -281,13 +329,17 @@ void WebSocketVoice::start_stream() {
   stream_start_ms_ = millis();
   last_speech_ms_ = stream_start_ms_;
 
+  // Update LED to "listening" animation
+  voice_assistant_phase = VA_PHASE_LISTENING;
+  control_leds->execute();
+
   // Notify server
   send_json(R"({"type":"utterance_start"})");
 
   // Add mic data callback only once
   if (!mic_callback_added_) {
     mic_->add_data_callback(
-        [this](const std::vector<uint8_t> &data) { on_mic_data_(data); });
+        [this](const auto &data) { on_mic_data_(data); });
     mic_callback_added_ = true;
   }
 
@@ -304,9 +356,10 @@ void WebSocketVoice::stop_stream() {
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
 
-  // Reset auto-start so the cycle continues
-  // (allows always-listening mode)
-  auto_started_ = false;
+  // Reset LED phase back to idle so the control_leds script shows
+  // the correct default animation (idle / no-HA-connection indicator).
+  voice_assistant_phase = VA_PHASE_IDLE;
+  control_leds->execute();
 }
 
 }  // namespace web_socket_voice
