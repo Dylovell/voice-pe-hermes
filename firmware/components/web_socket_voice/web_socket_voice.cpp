@@ -71,8 +71,15 @@ void WebSocketVoice::loop() {
       // First connection — wait for WiFi before attempting WebSocket.
       // This avoids an immediate connection failure (and spinlock assert
       // on old ESP-IDF websocket client) when lwip has no route yet.
+      //
+      // Throttle reconnections: skip if we attempted a connection within
+      // the last RECONNECT_DELAY_MS.  This prevents hammering the server
+      // when it is temporarily unreachable (e.g. the Hermes VM is
+      // rebooting during an OS update).  On first boot last_connect_ms_
+      // is 0 so the check passes immediately.
       if (!ws_client_) {
-        if (wifi::global_wifi_component->is_connected()) {
+        if (wifi::global_wifi_component->is_connected() &&
+            (millis() - last_connect_ms_ > RECONNECT_DELAY_MS)) {
           ESP_LOGI(TAG, "Initiating WebSocket connection");
           connect_ws();
           set_state_(VoiceState::CONNECTING);
@@ -108,7 +115,7 @@ void WebSocketVoice::loop() {
       }
       // Check silence timeout
       if (now - last_speech_ms_ > silence_timeout_ms_ &&
-          audio_buffer_.size() > MIC_SAMPLE_RATE * 2) {
+          total_mic_bytes_ > MIC_SAMPLE_RATE * 2) {
         ESP_LOGD(TAG, "Silence timeout, ending utterance");
         stop_stream();
       }
@@ -207,6 +214,21 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
           self->state_ != VoiceState::PLAYING_TTS) {
         self->set_state_(VoiceState::CONNECTED);
       }
+      // If we're already streaming when the WebSocket connects,
+      // send utterance_start now (start_stream() tried earlier
+      // but the WebSocket wasn't ready).
+      if (self->state_ == VoiceState::STREAMING_MIC) {
+        self->send_json(R"({"type":"utterance_start"})");
+        self->utterance_start_sent_ = true;
+        // Flush any audio data buffered before WebSocket connected
+        if (!self->preconnect_buffer_.empty()) {
+          ESP_LOGI(TAG, "Flushing %d bytes of pre-connect audio",
+                   self->preconnect_buffer_.size());
+          self->send_audio_chunk(self->preconnect_buffer_.data(),
+                                 self->preconnect_buffer_.size());
+          self->preconnect_buffer_.clear();
+        }
+      }
       break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
@@ -284,8 +306,27 @@ void WebSocketVoice::on_mic_data_(const ::std::vector<uint8_t> &data) {
   if (state_ != VoiceState::STREAMING_MIC)
     return;
 
-  // Buffer locally — audio is 16-bit PCM delivered as uint8_t bytes
-  audio_buffer_.insert(audio_buffer_.end(), data.begin(), data.end());
+  // Send utterance_start on the first audio chunk, when audio is actually
+  // flowing. This is more reliable than doing it from start_stream() because
+  // esp_websocket_client_send_text() can fail silently if called immediately
+  // after the state transition, before the WebSocket task processes the TX.
+  if (!utterance_start_sent_) {
+    send_json(R"({"type":"utterance_start"})");
+    utterance_start_sent_ = true;
+  }
+
+  total_mic_bytes_ += data.size();
+
+  // If WebSocket is connected, send audio directly.
+  // Otherwise buffer it — the connection handler will flush.
+  if (ws_client_ && esp_websocket_client_is_connected(ws_client_)) {
+    send_audio_chunk(data.data(), data.size());
+  } else {
+    // Keep buffer bounded — max ~1 second at 16kHz 16-bit = 32KB
+    if (preconnect_buffer_.size() < 32000) {
+      preconnect_buffer_.insert(preconnect_buffer_.end(), data.begin(), data.end());
+    }
+  }
 
   // Simple energy-based VAD (treat pairs of bytes as int16 samples)
   float rms = 0.0f;
@@ -301,8 +342,7 @@ void WebSocketVoice::on_mic_data_(const ::std::vector<uint8_t> &data) {
     last_speech_ms_ = millis();
   }
 
-  // Stream to server
-  send_audio_chunk(data.data(), data.size());
+  // Stream to server - handled above in the if/else block
 }
 
 // ── State management ──────────────────────────────────────────────────
@@ -341,16 +381,15 @@ void WebSocketVoice::start_stream() {
 
   ESP_LOGI(TAG, "STARTING microphone stream (state=%d)", static_cast<int>(state_));
 
-  audio_buffer_.clear();
+  total_mic_bytes_ = 0;
+  preconnect_buffer_.clear();
+  utterance_start_sent_ = false;
   stream_start_ms_ = millis();
   last_speech_ms_ = stream_start_ms_;
 
   // Update LED to "listening" animation
   LED_SET_PHASE(this, VA_PHASE_LISTENING);
   LED_RUN_SCRIPT(this);
-
-  // Notify server
-  send_json(R"({"type":"utterance_start"})");
 
   // Add mic data callback only once
   if (!mic_callback_added_) {
@@ -367,14 +406,16 @@ void WebSocketVoice::stop_stream() {
     return;
 
   ESP_LOGI(TAG, "Stopping microphone stream (%d samples)",
-           audio_buffer_.size());
+           total_mic_bytes_);
 
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
 
-  // Reset LED phase back to idle
+  // Set phase to idle. DON'T run the stock control_leds script
+  // here (which checks api_id.is_connected() and shows red).
+  // The YAML wifi.on_connect lambda handles idle LED display
+  // by calling control_leds_voice_assistant_idle_phase directly.
   LED_SET_PHASE(this, VA_PHASE_IDLE);
-  LED_RUN_SCRIPT(this);
 }
 
 }  // namespace web_socket_voice

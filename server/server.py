@@ -157,6 +157,7 @@ class VoiceConnection:
 
     async def _on_utterance_end(self) -> None:
         """Device has stopped streaming (VAD silence detected)."""
+        logger.debug("utterance_end received in state %s", self.state.name)
         if self.state != ConnectionState.LISTENING:
             logger.debug(
                 "Ignoring utterance_end in state %s", self.state.name
@@ -172,8 +173,7 @@ class VoiceConnection:
         self.audio_buffer.clear()
 
         # The ESP32 sends int16 PCM, but faster-whisper expects float32.
-        # Convert on the server side.
-        import numpy as np
+        # Convert on the server side (numpy imported at module level).
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         audio_np /= 32768.0
         max_val = float(np.max(np.abs(audio_np))) if len(audio_np) else 0
@@ -263,6 +263,23 @@ class VoiceConnection:
                 self._utterance_start_time = time.monotonic()
                 self.audio_buffer.extend(data)
                 return
+
+        # AUTO-LISTEN: If audio arrives in IDLE state, enter LISTENING state
+        # immediately and buffer the data.  This is a self-healing fallback
+        # for when the device's utterance_start TEXT message is delayed,
+        # lost, or reordered relative to binary audio frames.  Without this,
+        # audio received in IDLE is silently discarded and the server would
+        # wait forever for a control message that never comes.
+        if self.state == ConnectionState.IDLE:
+            logger.info(
+                "Audio received in IDLE — auto-entering LISTENING "
+                "(%d byte chunk)",
+                len(data),
+            )
+            self.state = ConnectionState.LISTENING
+            self._utterance_start_time = time.monotonic()
+            self.audio_buffer.extend(data)
+            return
 
         if self.state == ConnectionState.LISTENING:
             self.audio_buffer.extend(data)

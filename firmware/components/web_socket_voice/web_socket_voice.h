@@ -62,6 +62,9 @@ class WebSocketVoice : public Component {
   /// Stop listening (VAD timeout or manual stop).
   void stop_stream();
 
+  /// Get current state (for debug logging from YAML lambdas).
+  uint8_t get_state() const { return static_cast<uint8_t>(state_); }
+
   bool is_streaming() const { return state_ == VoiceState::STREAMING_MIC; }
   bool is_speaking() const { return state_ == VoiceState::PLAYING_TTS; }
   bool is_connected() const { return state_ != VoiceState::IDLE && state_ != VoiceState::CONNECTING && state_ != VoiceState::ERROR_STATE; }
@@ -94,8 +97,12 @@ class WebSocketVoice : public Component {
   globals::GlobalsComponent<int> *voice_assistant_phase_{nullptr};
   script::SingleScript<> *control_leds_{nullptr};
 
-  /// Buffer for audio data while listening (raw PCM bytes).
-  ::std::vector<uint8_t> audio_buffer_;
+  /// Total mic bytes received during current utterance (for silence threshold).
+  uint32_t total_mic_bytes_{0};
+
+  /// Pre-connect audio buffer: mic data received before the WebSocket
+  /// handshake completes. Once connected, this buffer is flushed and cleared.
+  ::std::vector<uint8_t> preconnect_buffer_;
 
   /// Buffer for incoming TTS audio (raw PCM).
   ::std::vector<uint8_t> tts_buffer_;
@@ -107,8 +114,8 @@ class WebSocketVoice : public Component {
   /// Timestamp of the last WebSocket connection attempt (ms).
   uint32_t last_connect_ms_{0};
 
-  /// Maximum utterance length (default 30s).
-  uint32_t max_utterance_ms_{5000};
+  /// Maximum utterance length (default 10s).
+  uint32_t max_utterance_ms_{10000};
   /// Silence timeout (stop after this much silence).
   uint32_t silence_timeout_ms_{1500};
 
@@ -118,10 +125,15 @@ class WebSocketVoice : public Component {
   /// Flag: WebSocket disconnected while in websocket task; main loop
   /// must destroy the handle (don't call destroy/stop from event handler).
   bool ws_needs_reconnect_{false};
-  /// Timestamp of last reconnect attempt (ms).
+
+  /// Timestamp of last reconnect attempt (ms) — used in conjunction
+  /// with RECONNECT_DELAY_MS to throttle reconnection frequency.
   uint32_t last_reconnect_ms_{0};
-  /// Maximum reconnect backoff delay (ms).
-  uint32_t max_reconnect_delay_ms_{30000};
+
+  /// Flag: has utterance_start been sent for this utterance?
+  /// Prevents duplicate sends — set true on first mic data chunk
+  /// or on WEBSOCKET_EVENT_CONNECTED if already streaming.
+  bool utterance_start_sent_{false};
 };
 
 }  // namespace web_socket_voice

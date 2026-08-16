@@ -7,10 +7,10 @@
 # but adds a WebSocket voice component that streams audio directly
 # to the Hermes Agent server — bypassing HA's Assist pipeline.
 #
-# NOTE: The stock voice_assistant component still compiles (for LED
-# integration and hardware triggers), but our custom component replaces
-# its audio pipeline. The center_button's single-click calls our
-# ws_voice.start_stream() instead of voice_assistant.start().
+# The stock control_leds script checks api_id.is_connected() and shows
+# red "no HA" twinkle when HA isn't connected. Since we bypass HA, we
+# call the LED sub-scripts (control_leds_voice_assistant_*_phase)
+# directly instead.
 
 substitutions:
   name: home-assistant-voice
@@ -52,38 +52,14 @@ web_socket_voice:
   microphone: i2s_mics
   speaker: i2s_audio_speaker
 
-# ── Script: start our WebSocket voice assistant ──────────────────────
-# Replaces voice_assistant.start() which requires HA API connection.
-# Manages LED state via voice_assistant_phase + control_leds for visual
-# feedback (Listening For Command animation).
-script:
-  - id: start_ws_voice_assistant
-    then:
-      - lambda: |-
-          ESP_LOGD("button", "Start ws_voice assistant (button press)");
-          id(ws_voice).start_stream();
-          id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-          id(control_leds).execute();
-
-# ── Button Redirect via voice_assistant Callback ─────────────────────
-# The stock center_button's simple-click ends with voice_assistant.start:
-# which is a no-op without HA. We intercept on_listening to redirect
-# to ws_voice.start_stream() + stop the HA attempt.
-voice_assistant:
-  id: va
-  on_listening:
-    - lambda: |-
-        ESP_LOGD("button", "voice_assistant start intercepted -> ws_voice");
-        id(ws_voice).start_stream();
-        id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-        id(control_leds).execute();
+# ── LED helper lambda snippet ─────────────────────────────────────────
+# Bypasses the stock control_leds script which checks api_id.is_connected()
+# and shows red "no HA" twinkle. We call LED phase sub-scripts directly.
+# To use: wrap in a lambda and call set_led_phase(phase_id).
 
 # ── Wake Word ────────────────────────────────────────────────────────
 # Override stock micro_wake_word's on_wake_word_detected handler to
 # route to ws_voice instead of voice_assistant.start().
-# NOTE: models are NOT listed here — they come from the stock package
-# and are merged by ESPHome. Only the on_wake_word_detected handler
-# is overridden.
 micro_wake_word:
   id: mww
   on_wake_word_detected:
@@ -121,24 +97,31 @@ micro_wake_word:
                                       priority: true
                                       sound_file: "wake_word_triggered_sound"
                                   - delay: 300ms
-                            # Route to ws_voice instead of voice_assistant.start
-                            - lambda: |-
-                                id(ws_voice).start_stream();
-                                id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-                                id(control_leds).execute();
+                      - lambda: |-
+                          ESP_LOGD("mww", "Calling start_stream (state=%d)", (int)id(ws_voice).get_state());
+                          id(ws_voice).start_stream();
+                          ESP_LOGD("mww", "start_stream returned, setting LED");
+                          id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+                          id(control_leds_voice_assistant_listening_for_command_phase).execute();
+                          ESP_LOGD("mww", "LED set complete");
+        else:
+          - lambda: |-
+              ESP_LOGD("mww", "MUTED — skipping");
 
 # ── WiFi init override ────────────────────────────────────────────────
 # The stock package waits for HA API connection to set init_in_progress=false
 # and start the wake word. Since we don't use HA API, we must do this ourselves.
-# ESPHome appends our on_connect actions to the package's (does NOT replace).
+# We also bypass the stock control_leds (which shows red due to no HA API)
+# and directly set the idle LED phase.
 wifi:
   ssid: ${wifi_ssid}
   password: ${wifi_password}
   on_connect:
     - lambda: |-
+        ESP_LOGI("voice_pe", "WiFi connected — idle LED, wake word active");
         id(init_in_progress) = false;
         id(voice_assistant_phase) = 1;
-    - script.execute: control_leds
+        id(control_leds_voice_assistant_idle_phase).execute();
     - micro_wake_word.start:
 
 # ── Logging ────────────────────────────────────────────────────────────
