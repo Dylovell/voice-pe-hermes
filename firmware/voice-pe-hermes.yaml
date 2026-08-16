@@ -123,6 +123,18 @@ wifi:
         id(control_leds_voice_assistant_idle_phase).execute();
     - micro_wake_word.start:
 
+# ── Center Button ──────────────────────────────────────────────────────
+# The stock package's center_button on_multi_click routes simple-click to
+# voice_assistant.start (harmless no-op without HA).  All multi-click
+# behaviors (timer silencing, media control, easter egg, factory reset)
+# work normally.  The wake word handler above is the primary voice trigger.
+
+# ── API ────────────────────────────────────────────────────────────────
+# NOTE: Stock package has `api:` with empty `encryption:` — the device
+# auto-generates a noise key.  We do NOT override it here to keep the
+# native API working (esphome logs can still connect despite the
+# RequiresEncryptionAPIError warning).
+
 # ── Logging ────────────────────────────────────────────────────────────
 logger:
   level: DEBUG

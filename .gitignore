@@ -24,3 +24,4 @@ Thumbs.db
 # Config
 .env
 config.yaml
+.esphome
