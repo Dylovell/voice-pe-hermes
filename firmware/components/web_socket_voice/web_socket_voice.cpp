@@ -62,7 +62,7 @@ static const char *const TAG = "web_socket_voice";
 // ── Constants ─────────────────────────────────────────────────────────
 
 constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-constexpr float SILENCE_THRESHOLD = 0.02f;
+static constexpr float SILENCE_THRESHOLD = 0.05f;
 constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
 constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
@@ -422,11 +422,11 @@ void WebSocketVoice::stop_stream() {
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
 
-  // Set phase to idle. DON'T run the stock control_leds script
-  // here (which checks api_id.is_connected() and shows red).
-  // The YAML wifi.on_connect lambda handles idle LED display
-  // by calling control_leds_voice_assistant_idle_phase directly.
+  // Set LED phase to idle and RUN the idle script to actually stop the
+  // blue Listening animation.  LED_SET_PHASE only changes the value;
+  // LED_SHOW_IDLE executes the sub-script that turns off the LEDs.
   LED_SET_PHASE(this, VA_PHASE_IDLE);
+  LED_SHOW_IDLE(this);
 }
 
 }  // namespace web_socket_voice

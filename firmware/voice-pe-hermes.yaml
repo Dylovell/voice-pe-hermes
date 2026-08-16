@@ -130,10 +130,32 @@ wifi:
 # work normally.  The wake word handler above is the primary voice trigger.
 
 # ── API ────────────────────────────────────────────────────────────────
-# NOTE: Stock package has `api:` with empty `encryption:` — the device
-# auto-generates a noise key.  We do NOT override it here to keep the
-# native API working (esphome logs can still connect despite the
-# RequiresEncryptionAPIError warning).
+# The stock package sets `encryption:` without a key (for HA to provide).
+# Without HA, the device auto-generates a key and `esphome logs` can't
+# connect.  Setting a static key fixes this.
+api:
+  encryption:
+    key: "JXcPPtQakziYdgSmMcAGUg7wmFZF9f+GJaO8IelEcf4="
+
+# ── Center Button via voice_assistant Intercept ──────────────────────
+# The stock center_button binary_sensor calls voice_assistant.start()
+# on simple click. Since we don't have HA, voice_assistant starts but
+# does nothing with the audio. We intercept voice_assistant.on_start
+# to route to ws_voice instead, and voice_assistant.on_stt_end to clean up.
+# This avoids the "ID redefined" issue with binary_sensor package overrides.
+voice_assistant:
+  on_start:
+    - lambda: |-
+        ESP_LOGD("va_intercept", "voice_assistant start — routing to ws_voice");
+        id(ws_voice).start_stream();
+  on_end:
+    - lambda: |-
+        if (id(ws_voice).is_streaming() || id(ws_voice).is_speaking()) {
+            ESP_LOGD("va_intercept", "voice_assistant end — stopping ws_voice");
+            id(ws_voice).stop_stream();
+            id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+            id(control_leds_voice_assistant_idle_phase).execute();
+        }
 
 # ── Logging ────────────────────────────────────────────────────────────
 logger:
