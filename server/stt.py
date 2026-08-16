@@ -92,7 +92,10 @@ class STTEngine:
                 beam_size=5,
                 language="en",
                 condition_on_previous_text=False,
-                vad_filter=False,  # skip VAD — handle silence server-side (3s timeout)
+                vad_filter=False,  # process all audio, don't filter segments
+                vad_parameters=dict(
+                    threshold=0.3,  # lower VAD sensitivity (default 0.5)
+                ),
             ),
         )
 
