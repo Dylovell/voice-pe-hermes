@@ -62,7 +62,7 @@ static const char *const TAG = "web_socket_voice";
 // ── Constants ─────────────────────────────────────────────────────────
 
 constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-static constexpr float SILENCE_THRESHOLD = 0.05f;
+static constexpr float SILENCE_THRESHOLD = 0.10f;
 constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
 constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
