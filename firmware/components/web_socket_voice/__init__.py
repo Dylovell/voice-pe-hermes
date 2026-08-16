@@ -59,18 +59,37 @@ async def to_code(config):
         spk = await cg.get_variable(config[CONF_SPEAKER])
         cg.add(var.set_speaker(spk))
 
-    # Wire LED control pointers from the stock package's globals.
-    # These are generated as `static` in main.cpp, so we obtain them
-    # through ESPHome's codegen ID resolution (not extern).
+    # Wire the stock voice_assistant_phase global so the firmware
+    # can track the current LED phase via LED_SET_PHASE.
     try:
         va_phase = await cg.get_variable(ID("voice_assistant_phase"))
         cg.add(var.set_voice_assistant_phase(va_phase))
     except Exception:
         pass  # Optional — stock package may omit if not configured
 
+    # Wire LED phase-specific script pointers from the stock package.
+    # We bypass the master control_leds script (which checks
+    # api_id.is_connected() and shows red without HA) and call
+    # the phase-specific sub-scripts directly instead.
     try:
-        ctrl_leds = await cg.get_variable(ID("control_leds"))
-        cg.add(var.set_control_leds(ctrl_leds))
+        idle_script = await cg.get_variable(ID("control_leds_voice_assistant_idle_phase"))
+        cg.add(var.set_idle_led_script(idle_script))
+    except Exception:
+        pass  # Optional — stock package may omit if not configured
+
+    try:
+        listening_script = await cg.get_variable(
+            ID("control_leds_voice_assistant_listening_for_command_phase")
+        )
+        cg.add(var.set_listening_led_script(listening_script))
+    except Exception:
+        pass  # Optional
+
+    try:
+        replying_script = await cg.get_variable(
+            ID("control_leds_voice_assistant_replying_phase")
+        )
+        cg.add(var.set_replying_led_script(replying_script))
     except Exception:
         pass  # Optional
 

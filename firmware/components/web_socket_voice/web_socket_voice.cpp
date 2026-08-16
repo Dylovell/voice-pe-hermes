@@ -28,19 +28,30 @@ static constexpr uint8_t VA_PHASE_THINKING = 4;
 static constexpr uint8_t VA_PHASE_REPLYING = 5;
 
 // ── LED helper macros ─────────────────────────
-// Guarded by null-checks — pointers are only set if YAML wires them.
-// Takes an explicit `obj` parameter (either `this` or a `self` pointer)
-// because LED_SET_PHASE/LED_RUN_SCRIPT are also used in static functions
-// (ws_event_handler_) that cannot access members via implicit `this`.
-#define LED_SET_PHASE(obj, phase)                     \
-  do {                                                 \
-    if ((obj)->voice_assistant_phase_ != nullptr)       \
-      (obj)->voice_assistant_phase_->value() = (phase); \
+// Bypass the stock control_leds script (which checks api_id.is_connected()
+// and shows red "no HA" glow).  Instead, call the phase-specific sub-scripts
+// directly.  Each macro takes an explicit `obj` pointer because these are
+// also used in static functions (ws_event_handler_) that cannot access
+// members via implicit `this`.
+#define LED_SET_PHASE(obj, phase)                      \
+  do {                                                  \
+    if ((obj)->voice_assistant_phase_ != nullptr)        \
+      (obj)->voice_assistant_phase_->value() = (phase);  \
   } while (0)
-#define LED_RUN_SCRIPT(obj)                           \
-  do {                                                 \
-    if ((obj)->control_leds_ != nullptr)                \
-      (obj)->control_leds_->execute();                  \
+#define LED_SHOW_LISTENING(obj)                        \
+  do {                                                  \
+    if ((obj)->listening_led_script_ != nullptr)         \
+      (obj)->listening_led_script_->execute();           \
+  } while (0)
+#define LED_SHOW_REPLYING(obj)                         \
+  do {                                                  \
+    if ((obj)->replying_led_script_ != nullptr)          \
+      (obj)->replying_led_script_->execute();            \
+  } while (0)
+#define LED_SHOW_IDLE(obj)                             \
+  do {                                                  \
+    if ((obj)->idle_led_script_ != nullptr)              \
+      (obj)->idle_led_script_->execute();                \
   } while (0)
 
 namespace esphome {
@@ -140,7 +151,7 @@ void WebSocketVoice::loop() {
 
         // Update LED to idle animation
         LED_SET_PHASE(this, VA_PHASE_IDLE);
-        LED_RUN_SCRIPT(this);
+        LED_SHOW_IDLE(this);
 
         // Send json speaking_end
         send_json(R"({"type":"speaking_end"})");
@@ -262,7 +273,7 @@ void WebSocketVoice::ws_event_handler_(void *handler_args,
             self->set_state_(VoiceState::WAITING_FOR_TTS);
             // Update LED to "replying" animation
             LED_SET_PHASE(self, VA_PHASE_REPLYING);
-            LED_RUN_SCRIPT(self);
+            LED_SHOW_REPLYING(self);
           } else if (strcmp(type->valuestring, "speaking_end") == 0) {
             // Server finished streaming. Don't stop or clear — let the
             // speaker finish the buffered audio naturally.
@@ -389,7 +400,7 @@ void WebSocketVoice::start_stream() {
 
   // Update LED to "listening" animation
   LED_SET_PHASE(this, VA_PHASE_LISTENING);
-  LED_RUN_SCRIPT(this);
+  LED_SHOW_LISTENING(this);
 
   // Add mic data callback only once
   if (!mic_callback_added_) {

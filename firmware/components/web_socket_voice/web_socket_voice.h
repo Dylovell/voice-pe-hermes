@@ -41,9 +41,18 @@ class WebSocketVoice : public Component {
   void set_voice_assistant_phase(globals::GlobalsComponent<int> *phase) {
     voice_assistant_phase_ = phase;
   }
-  /// Set pointer to the stock control_leds script (for LED animations).
-  void set_control_leds(script::SingleScript<> *script) {
-    control_leds_ = script;
+  /// Set pointer to the stock idle LED script (avoids master control_leds
+  /// which checks api_id.is_connected() and shows red without HA).
+  void set_idle_led_script(script::SingleScript<> *script) {
+    idle_led_script_ = script;
+  }
+  /// Set pointer to the stock listening LED script.
+  void set_listening_led_script(script::SingleScript<> *script) {
+    listening_led_script_ = script;
+  }
+  /// Set pointer to the stock replying LED script.
+  void set_replying_led_script(script::SingleScript<> *script) {
+    replying_led_script_ = script;
   }
 
   void set_microphone(microphone::Microphone *mic) { mic_ = mic; }
@@ -93,9 +102,13 @@ class WebSocketVoice : public Component {
   microphone::Microphone *mic_{nullptr};
   speaker::Speaker *spk_{nullptr};
 
-  /// Pointers to stock package globals for LED control (set via YAML wiring).
+  /// Pointers to stock package phase-specific LED scripts (set via YAML
+  /// wiring).  We bypass the master control_leds script because it
+  /// checks api_id.is_connected() and shows red when HA isn't connected.
   globals::GlobalsComponent<int> *voice_assistant_phase_{nullptr};
-  script::SingleScript<> *control_leds_{nullptr};
+  script::SingleScript<> *idle_led_script_{nullptr};
+  script::SingleScript<> *listening_led_script_{nullptr};
+  script::SingleScript<> *replying_led_script_{nullptr};
 
   /// Total mic bytes received during current utterance (for silence threshold).
   uint32_t total_mic_bytes_{0};

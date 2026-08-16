@@ -7,10 +7,14 @@
 # but adds a WebSocket voice component that streams audio directly
 # to the Hermes Agent server — bypassing HA's Assist pipeline.
 #
-# The stock control_leds script checks api_id.is_connected() and shows
-# red "no HA" twinkle when HA isn't connected. Since we bypass HA, we
-# call the LED sub-scripts (control_leds_voice_assistant_*_phase)
-# directly instead.
+# LED animations: the C++ firmware calls phase-specific LED sub-scripts
+# directly (control_leds_voice_assistant_*_phase), bypassing the stock
+# control_leds master script.  This is because the master script checks
+# api_id.is_connected() and shows a red "no HA" twinkle — we don't have
+# HA connected, so the sub-scripts are used instead for proper animations:
+#   - Listening: Fast clockwise blue spin
+#   - Replying:  Fast counter-clockwise blue spin
+#   - Idle:      LEDs off (or user-facing LED ring if enabled)
 
 substitutions:
   name: home-assistant-voice
@@ -51,11 +55,6 @@ web_socket_voice:
   server_port: ${ws_port}
   microphone: i2s_mics
   speaker: i2s_audio_speaker
-
-# ── LED helper lambda snippet ─────────────────────────────────────────
-# Bypasses the stock control_leds script which checks api_id.is_connected()
-# and shows red "no HA" twinkle. We call LED phase sub-scripts directly.
-# To use: wrap in a lambda and call set_led_phase(phase_id).
 
 # ── Wake Word ────────────────────────────────────────────────────────
 # Override stock micro_wake_word's on_wake_word_detected handler to
