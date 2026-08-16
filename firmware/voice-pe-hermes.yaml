@@ -139,7 +139,7 @@ voice_assistant:
     - lambda: |-
         ESP_LOGD("va_intercept", "voice_assistant end — tearing down");
         if (id(ws_voice).is_streaming() || id(ws_voice).is_speaking()) {
-            id(ws_voice).stop_stream();
+          id(ws_voice).stop_stream();
         }
 
 # ── API ────────────────────────────────────────────────────────────────

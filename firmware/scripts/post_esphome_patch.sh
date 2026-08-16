@@ -1,46 +1,55 @@
 #!/bin/bash
+# post_esphome_patch.sh — Patch Voice PE stock package
 #
-# post_esphome_patch.sh — Patch Voice PE stock package to disable the red "no HA" LED glow
+# Patches applied:
+#   1. Remove api_id.is_connected() from control_leds script (red LED fix)
+#   2. Change mic bits_per_sample from 32bit to 16bit (audio format fix)
 #
-# The stock Voice PE package's control_leds master script checks
-#   !id(wifi_id).is_connected() || !id(api_id).is_connected()
-# and shows a red twinkle on the LED ring when HA isn't connected.
-# Since Voice PE doesn't use HA, this always fires.
-#
-# This script replaces the combined check with just !id(wifi_id).is_connected(),
-# bypassing the api_id connectivity test entirely.
-#
-# Idempotent: checks if the target string exists before patching;
-#               if already patched (or never had the api_id check), prints
-#               "Skipped — already up to date" and exits 0.
-#
+# Idempotent: checks if each target string exists before patching.
 
 set -euo pipefail
 
-# Paths — relative to this script's location
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TARGET_FILE="$PROJECT_ROOT/firmware/.esphome/packages/f1018e04/home-assistant-voice.yaml"
 
-# The target string we want to patch — the OR condition that checks both wifi and api
-OLD_STRING='!id(wifi_id).is_connected() || !id(api_id).is_connected()'
-NEW_STRING='!id(wifi_id).is_connected()'
-
-# Resolve the target file
 if [ ! -f "$TARGET_FILE" ]; then
     echo "Error: Stock package file not found at $TARGET_FILE"
-    echo "Has ESPHome downloaded the Voice PE package yet? Run 'esphome compile' first."
+    echo "Run 'esphome compile' first to download the package."
     exit 1
 fi
 
-# Check if the target string exists (needs patching)
-if grep -q "$OLD_STRING" "$TARGET_FILE"; then
-    echo "Patched: removing api_id.is_connected() check from line $(grep -n "$OLD_STRING" "$TARGET_FILE" | head -1 | cut -d: -f1)"
-    echo "  $OLD_STRING"
-    echo "  → $NEW_STRING"
+patches=0
+
+# ── Patch 1: Red LED fix ──────────────────────────────────────────────
+OLD_LED='!id(wifi_id).is_connected() || !id(api_id).is_connected()'
+NEW_LED='!id(wifi_id).is_connected()'
+
+if grep -q "$OLD_LED" "$TARGET_FILE"; then
+    echo "P1: Removing api_id check from control_leds (line $(grep -n "$OLD_LED" "$TARGET_FILE" | head -1 | cut -d: -f1))"
     sed -i 's/!id(wifi_id).is_connected() || !id(api_id).is_connected()/!id(wifi_id).is_connected()/' "$TARGET_FILE"
+    patches=$((patches + 1))
+fi
+
+# ── Patch 2: Mic 32bit → 16bit ────────────────────────────────────────
+# The stock mic outputs 32-bit stereo.  Our WebSocket transport treats
+# all audio as 16-bit mono int16.  32-bit stereo data gets corrupted:
+# each 32-bit sample is split into two 16-bit values, doubling the
+# apparent duration and mangling the waveform.
+OLD_MIC='    bits_per_sample: 32bit'
+NEW_MIC='    bits_per_sample: 16bit'
+
+if grep -q "$OLD_MIC" "$TARGET_FILE"; then
+    echo "P2: Changing mic bits_per_sample 32bit → 16bit (line $(grep -n "$OLD_MIC" "$TARGET_FILE" | head -1 | cut -d: -f1))"
+    sed -i 's/    bits_per_sample: 32bit/    bits_per_sample: 16bit/' "$TARGET_FILE"
+    patches=$((patches + 1))
+fi
+
+# ── Summary ────────────────────────────────────────────────────────────
+if [ "$patches" -eq 0 ]; then
+    echo "No patches applied (already up to date)"
 else
-    echo "Skipped — already up to date"
+    echo "Applied $patches patch(es)"
 fi
 
 exit 0
