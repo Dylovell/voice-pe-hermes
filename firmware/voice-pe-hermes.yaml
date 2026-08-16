@@ -57,8 +57,9 @@ web_socket_voice:
   speaker: i2s_audio_speaker
 
 # ── Wake Word ────────────────────────────────────────────────────────
-# Override stock micro_wake_word's on_wake_word_detected handler to
-# route to ws_voice instead of voice_assistant.start().
+# Routes directly to ws_voice (not voice_assistant) with a 5-second
+# auto-stop timer.  The server's 3-second silence timeout provides a
+# safety net for longer utterances.
 micro_wake_word:
   id: mww
   on_wake_word_detected:
@@ -72,7 +73,7 @@ micro_wake_word:
                 switch.is_on: timer_ringing
               then:
                 - switch.turn_off: timer_ringing
-          # Stop any running voice_assistant (will be restarted below)
+          # Stop any running voice_assistant (for button path)
           - if:
               condition:
                 voice_assistant.is_running:
@@ -97,9 +98,12 @@ micro_wake_word:
                     priority: true
                     sound_file: "wake_word_triggered_sound"
                 - delay: 300ms
-          # Start voice_assistant — its on_start triggers ws_voice.start_stream()
-          # and on_end triggers ws_voice.stop_stream() when VAD detects silence
-          - voice_assistant.start:
+          # Start ws_voice directly (no voice_assistant dependency).
+          # The stream auto-stops after 5 seconds — do NOT add
+          # voice_assistant.start here; that's for the button path.
+          - lambda: |-
+              ESP_LOGD("mww", "Wake word → ws_voice start_stream");
+              id(ws_voice).start_stream();
         else:
           - lambda: |-
               ESP_LOGD("mww", "MUTED — skipping");
@@ -120,11 +124,23 @@ wifi:
         id(control_leds_voice_assistant_idle_phase).execute();
     - micro_wake_word.start:
 
-# ── Center Button ──────────────────────────────────────────────────────
-# The stock package's center_button on_multi_click routes simple-click to
-# voice_assistant.start (harmless no-op without HA).  All multi-click
-# behaviors (timer silencing, media control, easter egg, factory reset)
-# work normally.  The wake word handler above is the primary voice trigger.
+# ── Center Button via voice_assistant Intercept ──────────────────────
+# The stock center_button binary_sensor calls voice_assistant.start()
+# on simple click.  We intercept on_start to route to ws_voice instead.
+# NOTE: only on_start and on_end are specified here — the stock
+# package already defines id, mic, media_player, etc.  ESPHome merges
+# configs, so duplicating fields would append (e.g. 2+2=4 mics).
+voice_assistant:
+  on_start:
+    - lambda: |-
+        ESP_LOGD("va_intercept", "voice_assistant start — routing to ws_voice");
+        id(ws_voice).start_stream();
+  on_end:
+    - lambda: |-
+        ESP_LOGD("va_intercept", "voice_assistant end — tearing down");
+        if (id(ws_voice).is_streaming() || id(ws_voice).is_speaking()) {
+            id(ws_voice).stop_stream();
+        }
 
 # ── API ────────────────────────────────────────────────────────────────
 # The stock package sets `encryption:` without a key (for HA to provide).
@@ -133,26 +149,6 @@ wifi:
 api:
   encryption:
     key: "JXcPPtQakziYdgSmMcAGUg7wmFZF9f+GJaO8IelEcf4="
-
-# ── Center Button via voice_assistant Intercept ──────────────────────
-# The stock center_button binary_sensor calls voice_assistant.start()
-# on simple click. Since we don't have HA, voice_assistant starts but
-# does nothing with the audio. We intercept voice_assistant.on_start
-# to route to ws_voice instead, and voice_assistant.on_stt_end to clean up.
-# This avoids the "ID redefined" issue with binary_sensor package overrides.
-voice_assistant:
-  on_start:
-    - lambda: |-
-        ESP_LOGD("va_intercept", "voice_assistant start — routing to ws_voice");
-        id(ws_voice).start_stream();
-  on_end:
-    - lambda: |-
-        if (id(ws_voice).is_streaming() || id(ws_voice).is_speaking()) {
-            ESP_LOGD("va_intercept", "voice_assistant end — stopping ws_voice");
-            id(ws_voice).stop_stream();
-            id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-            id(control_leds_voice_assistant_idle_phase).execute();
-        }
 
 # ── Logging ────────────────────────────────────────────────────────────
 logger:

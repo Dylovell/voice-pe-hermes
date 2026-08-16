@@ -117,12 +117,11 @@ void WebSocketVoice::loop() {
       break;
 
     case VoiceState::STREAMING_MIC:
-      // Max utterance timeout (safety limit — prevents infinite streaming).
-      // Silence detection is handled by the voice_assistant pipeline.
-      // voice_assistant.on_end → ws_voice.stop_stream() is the normal path.
-      // The server 3s timeout is a secondary safety net.
-      if (now - stream_start_ms_ > max_utterance_ms_) {
-        ESP_LOGD(TAG, "Utterance timeout (%d ms)", max_utterance_ms_);
+      // Auto-stop after 5 seconds — no voice_assistant VAD dependency.
+      // The server's 3-second silence timeout provides a secondary
+      // safety net for the user's actual utterance duration.
+      if (now - stream_start_ms_ > 5000) {
+        ESP_LOGD(TAG, "Stream timeout (5s), ending utterance");
         stop_stream();
         break;
       }
@@ -390,6 +389,9 @@ void WebSocketVoice::start_stream() {
   LED_SET_PHASE(this, VA_PHASE_LISTENING);
   LED_SHOW_LISTENING(this);
 
+  // Start the mic — ws_voice owns the mic lifecycle (no voice_assistant)
+  mic_->start();
+
   // Add mic data callback only once
   if (!mic_callback_added_) {
     mic_->add_data_callback(
@@ -408,6 +410,11 @@ void WebSocketVoice::stop_stream() {
 
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
+
+  // Stop the mic
+  if (mic_ != nullptr) {
+    mic_->stop();
+  }
 
   // Set LED phase to idle and RUN the idle script to actually stop the
   // blue Listening animation.  LED_SET_PHASE only changes the value;
