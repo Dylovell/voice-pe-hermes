@@ -68,7 +68,7 @@ class WebSocketVoice : public Component {
   // ── Public API ─────────────────────────────────────────────────────
   /// Start listening (triggered by wake word or button press).
   void start_stream();
-  /// Stop listening (VAD timeout or manual stop).
+  /// Stop listening (triggered by voice_assistant pipeline).
   void stop_stream();
 
   /// Get current state (for debug logging from YAML lambdas).
@@ -110,9 +110,6 @@ class WebSocketVoice : public Component {
   script::SingleScript<> *listening_led_script_{nullptr};
   script::SingleScript<> *replying_led_script_{nullptr};
 
-  /// Total mic bytes received during current utterance (for silence threshold).
-  uint32_t total_mic_bytes_{0};
-
   /// Pre-connect audio buffer: mic data received before the WebSocket
   /// handshake completes. Once connected, this buffer is flushed and cleared.
   ::std::vector<uint8_t> preconnect_buffer_;
@@ -123,7 +120,6 @@ class WebSocketVoice : public Component {
 
   /// Timestamps for timeout detection (ms).
   uint32_t stream_start_ms_{0};
-  uint32_t last_speech_ms_{0};
   /// Timestamp of the last WebSocket connection attempt (ms)
   /// — used in conjunction with RECONNECT_DELAY_MS to throttle
   /// reconnection frequency.
@@ -131,8 +127,6 @@ class WebSocketVoice : public Component {
 
   /// Maximum utterance length (default 10s).
   uint32_t max_utterance_ms_{10000};
-  /// Silence timeout (stop after this much silence).
-  uint32_t silence_timeout_ms_{1500};
 
   /// Flag: has the mic data callback already been registered?
   bool mic_callback_added_{false};

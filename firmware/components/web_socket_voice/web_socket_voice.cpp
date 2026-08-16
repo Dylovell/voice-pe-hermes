@@ -62,7 +62,6 @@ static const char *const TAG = "web_socket_voice";
 // ── Constants ─────────────────────────────────────────────────────────
 
 constexpr uint32_t MIC_SAMPLE_RATE = 16000;
-static constexpr float SILENCE_THRESHOLD = 0.10f;
 constexpr size_t AUDIO_CHUNK_SIZE = 512;  // bytes per mic callback chunk
 constexpr uint32_t RECONNECT_DELAY_MS = 5000;
 
@@ -118,17 +117,14 @@ void WebSocketVoice::loop() {
       break;
 
     case VoiceState::STREAMING_MIC:
-      // Check utterance timeout
+      // Max utterance timeout (safety limit — prevents infinite streaming).
+      // Silence detection is handled by the voice_assistant pipeline.
+      // voice_assistant.on_end → ws_voice.stop_stream() is the normal path.
+      // The server 3s timeout is a secondary safety net.
       if (now - stream_start_ms_ > max_utterance_ms_) {
         ESP_LOGD(TAG, "Utterance timeout (%d ms)", max_utterance_ms_);
         stop_stream();
         break;
-      }
-      // Check silence timeout
-      if (now - last_speech_ms_ > silence_timeout_ms_ &&
-          total_mic_bytes_ > MIC_SAMPLE_RATE * 2) {
-        ESP_LOGD(TAG, "Silence timeout, ending utterance");
-        stop_stream();
       }
       break;
 
@@ -326,8 +322,6 @@ void WebSocketVoice::on_mic_data_(const ::std::vector<uint8_t> &data) {
     utterance_start_sent_ = true;
   }
 
-  total_mic_bytes_ += data.size();
-
   // If WebSocket is connected, send audio directly.
   // Otherwise buffer it — the connection handler will flush.
   if (ws_client_ && esp_websocket_client_is_connected(ws_client_)) {
@@ -337,20 +331,6 @@ void WebSocketVoice::on_mic_data_(const ::std::vector<uint8_t> &data) {
     if (preconnect_buffer_.size() < 32000) {
       preconnect_buffer_.insert(preconnect_buffer_.end(), data.begin(), data.end());
     }
-  }
-
-  // Simple energy-based VAD (treat pairs of bytes as int16 samples)
-  float rms = 0.0f;
-  size_t sample_count = data.size() / 2;
-  const int16_t *samples = reinterpret_cast<const int16_t *>(data.data());
-  for (size_t i = 0; i < sample_count; i++) {
-    float sample = samples[i] / 32768.0f;
-    rms += sample * sample;
-  }
-  rms = sqrtf(rms / (sample_count > 0 ? sample_count : 1));
-
-  if (rms > SILENCE_THRESHOLD) {
-    last_speech_ms_ = millis();
   }
 
   // Stream to server - handled above in the if/else block
@@ -392,11 +372,9 @@ void WebSocketVoice::start_stream() {
 
   ESP_LOGI(TAG, "STARTING microphone stream (state=%d)", static_cast<int>(state_));
 
-  total_mic_bytes_ = 0;
   preconnect_buffer_.clear();
   utterance_start_sent_ = false;
   stream_start_ms_ = millis();
-  last_speech_ms_ = stream_start_ms_;
 
   // Update LED to "listening" animation
   LED_SET_PHASE(this, VA_PHASE_LISTENING);
@@ -416,8 +394,7 @@ void WebSocketVoice::stop_stream() {
   if (state_ != VoiceState::STREAMING_MIC)
     return;
 
-  ESP_LOGI(TAG, "Stopping microphone stream (%d samples)",
-           total_mic_bytes_);
+  ESP_LOGI(TAG, "Stopping microphone stream");
 
   send_json(R"({"type":"utterance_end"})");
   set_state_(VoiceState::CONNECTED);
