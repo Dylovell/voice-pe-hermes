@@ -66,43 +66,40 @@ micro_wake_word:
         condition:
           switch.is_off: master_mute_switch
         then:
+          # Always turn off ringing timer first
           - if:
               condition:
                 switch.is_on: timer_ringing
               then:
                 - switch.turn_off: timer_ringing
-              else:
-                - if:
-                    condition:
-                      voice_assistant.is_running:
-                    then:
-                      - voice_assistant.stop:
-                    else:
-                      - if:
-                          condition:
-                            media_player.is_announcing:
-                              id: external_media_player
-                          then:
-                            - media_player.stop:
-                                announcement: true
-                                id: external_media_player
-                          else:
-                            - if:
-                                condition:
-                                  switch.is_on: wake_sound
-                                then:
-                                  - script.execute:
-                                      id: play_sound
-                                      priority: true
-                                      sound_file: "wake_word_triggered_sound"
-                                  - delay: 300ms
-                      - lambda: |-
-                          ESP_LOGD("mww", "Calling start_stream (state=%d)", (int)id(ws_voice).get_state());
-                          id(ws_voice).start_stream();
-                          ESP_LOGD("mww", "start_stream returned, setting LED");
-                          id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-                          id(control_leds_voice_assistant_listening_for_command_phase).execute();
-                          ESP_LOGD("mww", "LED set complete");
+          # Stop any running voice_assistant (will be restarted below)
+          - if:
+              condition:
+                voice_assistant.is_running:
+              then:
+                - voice_assistant.stop:
+          # Stop media announcements
+          - if:
+              condition:
+                media_player.is_announcing:
+                  id: external_media_player
+              then:
+                - media_player.stop:
+                    announcement: true
+                    id: external_media_player
+          # Play wake sound if enabled
+          - if:
+              condition:
+                switch.is_on: wake_sound
+              then:
+                - script.execute:
+                    id: play_sound
+                    priority: true
+                    sound_file: "wake_word_triggered_sound"
+                - delay: 300ms
+          # Start voice_assistant — its on_start triggers ws_voice.start_stream()
+          # and on_end triggers ws_voice.stop_stream() when VAD detects silence
+          - voice_assistant.start:
         else:
           - lambda: |-
               ESP_LOGD("mww", "MUTED — skipping");
