@@ -20,10 +20,8 @@ substitutions:
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
 
-  # Wake word — comment out to disable
-  # micro_wake_word_model: hey_jarvis
-  # micro_wake_word_model: okay_nabu
-  # micro_wake_word_model: hey_mycroft
+  # Wake word — enable one model
+  micro_wake_word_model: okay_nabu
 
   # Hermes WebSocket server
   ws_host: !secret ws_host
@@ -67,18 +65,67 @@ script:
           id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
           id(control_leds).execute();
 
-# ── Center Button Override ───────────────────────────────────────────
-# DISABLED for T1 — the stock package's center_button routes simple-click
-# through voice_assistant.start() which is a no-op without HA but harmless.
-# T3 (t_393fb1fa) will reinstate this with proper ws_voice routing.
-#binary_sensor:
-#  # Center Button. Used for many things (See on_multi_click)
-#  - platform: gpio
-#    id: center_button
-#    pin:
-#      number: GPIO0
-#      inverted: true
-#   ... (multi-click chain from stock package) ...
+# ── Button Redirect via voice_assistant Callback ─────────────────────
+# The stock center_button's simple-click ends with voice_assistant.start:
+# which is a no-op without HA. We intercept on_listening to redirect
+# to ws_voice.start_stream() + stop the HA attempt.
+voice_assistant:
+  id: va
+  on_listening:
+    - lambda: |-
+        ESP_LOGD("button", "voice_assistant start intercepted -> ws_voice");
+        id(ws_voice).start_stream();
+        id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+        id(control_leds).execute();
+
+# ── Wake Word ────────────────────────────────────────────────────────
+# Override stock micro_wake_word's on_wake_word_detected handler to
+# route to ws_voice instead of voice_assistant.start().
+# NOTE: models are NOT listed here — they come from the stock package
+# and are merged by ESPHome. Only the on_wake_word_detected handler
+# is overridden.
+micro_wake_word:
+  id: mww
+  on_wake_word_detected:
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          - if:
+              condition:
+                switch.is_on: timer_ringing
+              then:
+                - switch.turn_off: timer_ringing
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                    else:
+                      - if:
+                          condition:
+                            media_player.is_announcing:
+                              id: external_media_player
+                          then:
+                            - media_player.stop:
+                                announcement: true
+                                id: external_media_player
+                          else:
+                            - if:
+                                condition:
+                                  switch.is_on: wake_sound
+                                then:
+                                  - script.execute:
+                                      id: play_sound
+                                      priority: true
+                                      sound_file: "wake_word_triggered_sound"
+                                  - delay: 300ms
+                            # Route to ws_voice instead of voice_assistant.start
+                            - lambda: |-
+                                id(ws_voice).start_stream();
+                                id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+                                id(control_leds).execute();
 
 # ── WiFi init override ────────────────────────────────────────────────
 # The stock package waits for HA API connection to set init_in_progress=false
@@ -92,6 +139,7 @@ wifi:
         id(init_in_progress) = false;
         id(voice_assistant_phase) = 1;
     - script.execute: control_leds
+    - micro_wake_word.start:
 
 # ── Logging ────────────────────────────────────────────────────────────
 logger:
